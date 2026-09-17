@@ -494,9 +494,35 @@ fn linux_and_windows_install_tasks_embed_verified_installer_inputs() {
             String::from_utf8_lossy(&response.body)
         );
         assert_eq!(host.created_tasks.len(), 1);
-        let command = &host.created_tasks[0].2;
-        assert!(command.contains(&"a".repeat(64)));
-        assert!(command.contains(".plugins"));
+
+        // Pinned in full: a substring check passes just as happily when the
+        // caller and the installer disagree about the argument names.
+        let digest = "a".repeat(64);
+        let expected = if os == "windows" {
+            format!(
+                concat!(
+                    "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass ",
+                    r#"-File "C:\GameAP Data\.plugins\fastdla\install-windows.ps1" "#,
+                    "-DownloadUrl https://releases.example/gameap-fastdl ",
+                    "-Sha256 {digest} ",
+                    r#"-InstallDir "C:\GameAP Data\.plugins\fastdla" "#,
+                    r#"-ConfigPath "C:\GameAP Data\.plugins\fastdla\config.json""#,
+                ),
+                digest = digest,
+            )
+        } else {
+            format!(
+                concat!(
+                    "/bin/bash /srv/gameap/.plugins/fastdla/install-linux.sh ",
+                    "--download-url=https://releases.example/gameap-fastdl ",
+                    "--sha256={digest} ",
+                    "--install-dir=/srv/gameap/.plugins/fastdla ",
+                    "--config=/srv/gameap/.plugins/fastdla/config.json",
+                ),
+                digest = digest,
+            )
+        };
+        assert_eq!(host.created_tasks[0].2, expected);
 
         let installer_name = if os == "windows" {
             "install-windows.ps1"
@@ -507,6 +533,42 @@ fn linux_and_windows_install_tasks_embed_verified_installer_inputs() {
             host.uploads
                 .iter()
                 .any(|(_, path, mode)| path.ends_with(installer_name) && *mode == 0o700)
+        );
+    }
+}
+
+// The installers are compiled into the plugin, so a renamed option is a
+// compile-time-visible break rather than something a node discovers at install
+// time.
+#[test]
+fn installers_accept_the_options_the_plugin_passes() {
+    let linux = include_str!("../../scripts/install-linux.sh");
+    for option in [
+        "--download-url=",
+        "--sha256=",
+        "--install-dir=",
+        "--config=",
+        "--check",
+        "--help",
+    ] {
+        assert!(
+            linux.contains(option),
+            "{option} is missing from install-linux.sh"
+        );
+    }
+
+    let windows = include_str!("../../scripts/install-windows.ps1");
+    for parameter in [
+        "$DownloadUrl",
+        "$Sha256",
+        "$InstallDir",
+        "$ConfigPath",
+        "$Check",
+        "$Help",
+    ] {
+        assert!(
+            windows.contains(parameter),
+            "{parameter} is missing from install-windows.ps1"
         );
     }
 }

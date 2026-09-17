@@ -184,11 +184,19 @@ fn installation_command(
         ]));
     }
 
+    // The daemon splits the command itself and never runs a shell, so the
+    // interpreter is named rather than relying on the shebang: a work path
+    // mounted noexec would otherwise defeat the uploaded script's mode.
+    let download_url = format!("--download-url={}", input.download_url);
+    let sha256 = format!("--sha256={}", input.sha256);
+    let install_dir = format!("--install-dir={install_dir}");
+    let config_path = format!("--config={config_path}");
+
     Ok(shell_join(&[
-        "/bin/sh",
+        "/bin/bash",
         script_path,
-        &input.download_url,
-        &input.sha256,
+        &download_url,
+        &sha256,
         &install_dir,
         &config_path,
     ]))
