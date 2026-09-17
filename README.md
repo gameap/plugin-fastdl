@@ -19,6 +19,31 @@ npm run typecheck
 
 Upload `fastdl.wasm` through GameAP's plugin management. Grant `files`, `listen_events`, `manage_servers`, and `node_commands`. The technical plugin ID is `fastdla`: it round-trips through GameAP's compact base32 ID encoding. The visible name is **FastDL**. The six-character name `fastdl` cannot be used as the technical ID because the host would normalize it to a different identifier.
 
+## Rust backend structure
+
+The backend follows the layout of `plugin-files`:
+
+```text
+src/
+  lib.rs                Plugin registration and SDK entry points
+  router.rs             Route table, matching and request dispatch
+  http.rs               JSON parsing, responses and API errors
+  handlers/             HTTP handlers, authorization and event dispatch
+  domain/               Node/server models and input validation
+  services/
+    admin.rs            Node overview
+    node_setup.rs       Installation, status and node settings
+    servers.rs          Game server settings and activation
+    sync.rs             Configuration publication and reconciliation
+    game_config.rs      Scoped server.cfg helper invocation
+    paths.rs            Validated daemon paths and public URLs
+    store.rs            Typed access to persistent plugin state
+  host_api.rs           SDK adapter and test host
+  shell.rs              Daemon command argument quoting
+```
+
+Handlers check permissions, parse requests and delegate to services. Services use typed domain models; storage keys and serialization are centralized in `store`. The router table supplies both local dispatch and routes registered with GameAP. Tests exercise the same handlers and services through the host adapter.
+
 ## Node installation
 
 1. Build the appropriate standalone `gameap-fastdl` executable from the sibling project. Publish it at a trusted HTTPS URL and obtain its SHA256 digest from the trusted build.
@@ -65,16 +90,16 @@ The numeric filename is private administrative state; HTTP uses only the indepen
 
 All routes are relative to `/api/plugins/fastdla` and require an authenticated session.
 
-| Method   | Route                         | Access            | Purpose                            |
-|----------|-------------------------------|-------------------|------------------------------------|
-| GET      | `/admin/nodes`                | Administrator     | Node list and installation state   |
-| GET      | `/nodes/{nodeId}/config`      | Administrator     | Listen and public URL settings     |
-| PUT      | `/nodes/{nodeId}/config`      | Administrator     | Save and apply node settings       |
-| GET      | `/nodes/{nodeId}/status`      | Administrator     | Poll installation task             |
-| POST     | `/nodes/{nodeId}/setup`       | Administrator     | Install/update verified binary     |
-| POST     | `/nodes/{nodeId}/sync`        | Administrator     | Reapply desired node state         |
-| GET      | `/servers/{serverId}/fastdl`  | View or manage    | Server settings and download URL   |
-| PUT      | `/servers/{serverId}/fastdl`  | Manage            | Apply server settings              |
+| Method | Route                        | Access         | Purpose                          |
+|--------|------------------------------|----------------|----------------------------------|
+| GET    | `/admin/nodes`               | Administrator  | Node list and installation state |
+| GET    | `/nodes/{nodeId}/config`     | Administrator  | Listen and public URL settings   |
+| PUT    | `/nodes/{nodeId}/config`     | Administrator  | Save and apply node settings     |
+| GET    | `/nodes/{nodeId}/status`     | Administrator  | Poll installation task           |
+| POST   | `/nodes/{nodeId}/setup`      | Administrator  | Install/update verified binary   |
+| POST   | `/nodes/{nodeId}/sync`       | Administrator  | Reapply desired node state       |
+| GET    | `/servers/{serverId}/fastdl` | View or manage | Server settings and download URL |
+| PUT    | `/servers/{serverId}/fastdl` | Manage         | Apply server settings            |
 
 Node settings are `{ "listen": "0.0.0.0:8080", "public_base_url": "http://cdn.example" }`. Setup accepts `{ "download_url": "https://releases.example/gameap-fastdl", "sha256": "<64 hexadecimal digits>" }`. A server update accepts `enabled`, `autoindex`, `engine` (`goldsource` or `source`), `game_dir`, `manage_game_config`, and `generate_bz2`. Unknown fields are rejected.
 
