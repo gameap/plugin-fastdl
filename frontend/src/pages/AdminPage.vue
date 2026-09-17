@@ -98,7 +98,10 @@ async function load() {
     nodes.value = result;
     schedulePoll();
   } catch (e) {
-    if (!disposed && request === generation) error.value = errorMessage(e, trans('load_failed'));
+    if (!disposed && request === generation) {
+      error.value = errorMessage(e, trans('load_failed'));
+      schedulePoll();
+    }
   } finally {
     if (!disposed && request === generation) loading.value = false;
   }

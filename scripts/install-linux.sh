@@ -42,11 +42,18 @@ if [ -f "$binary" ]; then cp -p "$binary" "$staging/previous"; had_binary=true; 
 if [ -f "$unit" ]; then cp -p "$unit" "$staging/previous.service"; had_unit=true; fi
 was_active=false
 if systemctl is-active --quiet gameap-fastdl; then was_active=true; fi
+was_enabled=false
+if systemctl is-enabled --quiet gameap-fastdl; then was_enabled=true; fi
 rollback() {
     systemctl stop gameap-fastdl >/dev/null 2>&1 || true
     if [ "$had_binary" = true ]; then cp -p "$staging/previous" "$binary"; else rm -f "$binary"; fi
     if [ "$had_unit" = true ]; then
         cp -p "$staging/previous.service" "$unit"
+        if [ "$was_enabled" = true ]; then
+            systemctl enable gameap-fastdl >/dev/null 2>&1 || true
+        else
+            systemctl disable gameap-fastdl >/dev/null 2>&1 || true
+        fi
     else
         systemctl disable gameap-fastdl >/dev/null 2>&1 || true
         rm -f "$unit"
