@@ -82,7 +82,7 @@ async function poll() {
     const node = nodes.value.find((item) => item.id === installing[index].id);
     if (node) Object.assign(node, result.value);
   });
-  if (!pollError.value) schedulePoll();
+  schedulePoll();
 }
 
 async function load() {

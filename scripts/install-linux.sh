@@ -45,7 +45,12 @@ if systemctl is-active --quiet gameap-fastdl; then was_active=true; fi
 rollback() {
     systemctl stop gameap-fastdl >/dev/null 2>&1 || true
     if [ "$had_binary" = true ]; then cp -p "$staging/previous" "$binary"; else rm -f "$binary"; fi
-    if [ "$had_unit" = true ]; then cp -p "$staging/previous.service" "$unit"; else rm -f "$unit"; fi
+    if [ "$had_unit" = true ]; then
+        cp -p "$staging/previous.service" "$unit"
+    else
+        systemctl disable gameap-fastdl >/dev/null 2>&1 || true
+        rm -f "$unit"
+    fi
     systemctl daemon-reload || true
     if [ "$was_active" = true ]; then systemctl start gameap-fastdl || true; fi
 }

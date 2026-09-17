@@ -44,11 +44,12 @@ impl Default for NodeConfig {
 
 impl NodeConfig {
     pub fn validate(&self) -> Result<(), ApiError> {
-        self.listen
+        let address = self
+            .listen
             .parse::<SocketAddr>()
             .map_err(|_| ApiError::bad_request("Listen address must be an IP address and port"))?;
 
-        if self.listen.ends_with(":0") {
+        if address.port() == 0 {
             return Err(ApiError::bad_request("Listen port must not be zero"));
         }
 
@@ -169,7 +170,15 @@ mod tests {
 
     #[test]
     fn node_config_requires_an_ip_address_and_nonzero_port() {
-        for listen in ["example.com:8080", "0.0.0.0:0", "[::]:0"] {
+        for listen in [
+            "example.com:8080",
+            "0.0.0.0:0",
+            "0.0.0.0:00",
+            "0.0.0.0:000",
+            "[::]:0",
+            "[::]:00",
+            "[::1]:000",
+        ] {
             let config = NodeConfig {
                 listen: listen.into(),
                 ..Default::default()
