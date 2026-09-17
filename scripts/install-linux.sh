@@ -274,7 +274,9 @@ _unit_exec_start() {
 }
 
 _unit_binary() {
-    sed -n 's/^ExecStart="\{0,1\}\([^" ]*\)"\{0,1\} .*/\1/p' "$1" 2>/dev/null | head -n 1
+    sed -n \
+        -e 's/^ExecStart="\([^"]*\)".*/\1/p' \
+        -e 's/^ExecStart=\([^"[:space:]][^[:space:]]*\).*/\1/p' "$1" 2>/dev/null | head -n 1
 }
 
 _unit_config() {

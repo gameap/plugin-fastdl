@@ -1,5 +1,5 @@
 <template>
-  <div class="fastdl-admin space-y-4">
+  <div v-if="isAdmin" class="fastdl-admin space-y-4">
     <GBreadcrumbs :items="breadcrumbs" />
     <p class="text-stone-500">{{ trans('introduction') }}</p>
     <div class="flex flex-wrap items-center gap-3">
@@ -42,12 +42,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { NAlert, NCard, NInput, NSpin } from 'naive-ui';
-import { usePluginTrans } from '@gameap/plugin-sdk';
+import { useRouter } from 'vue-router';
+import { useIsAdmin, usePluginTrans } from '@gameap/plugin-sdk';
 import { errorMessage, fastdlApi, type FastDLNode, type InstallState, type NodeStatus } from '../api';
 import NodeSettings from '../components/NodeSettings.vue';
 import NodeInstall from '../components/NodeInstall.vue';
 
 const { trans } = usePluginTrans();
+const isAdmin = useIsAdmin();
+const router = useRouter();
 const breadcrumbs = computed(() => [{ route: '/', text: 'GameAP', icon: 'gicon gicon-gameap' }, { text: trans('fastdl') }, { text: trans('nodes') }]);
 const nodes = ref<FastDLNode[]>([]);
 const search = ref('');
@@ -134,7 +137,13 @@ async function sync(node: FastDLNode) {
   }
 }
 
-onMounted(load);
+onMounted(() => {
+  if (!isAdmin.value) {
+    void router.replace({ name: 'error403' });
+    return;
+  }
+  void load();
+});
 onBeforeUnmount(() => { disposed = true; generation++; clearTimeout(timer); });
 </script>
 
