@@ -76,6 +76,7 @@ pub struct NodeSetupStatus {
     pub status: SetupStatus,
     pub version: String,
     pub task_id: u64,
+    /// Retained to finish installations started by the get-tool-based release.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub download_task_id: u64,
     pub error_message: String,

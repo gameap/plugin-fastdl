@@ -53,20 +53,24 @@ class ReleaseResolutionTests(unittest.TestCase):
             return result, requests
 
     def test_native_architectures_use_one_pinned_release(self):
-        for native, expected in [("x86_64", "amd64"), ("amd64", "amd64"),
-                                 ("aarch64", "arm64"), ("arm64", "arm64")]:
-            with self.subTest(native=native):
-                result, requests = self.run_script(
-                    'resolve_release; printf "RESULT=%s,%s\\n" "$DOWNLOAD_URL" "$SHA256"',
-                    TEST_ARCH=native,
-                )
-                url = f"{REPOSITORY}/releases/download/v1.2.3/gameap-fastdl-linux-{expected}"
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(f"RESULT={url},{DIGEST}", result.stdout)
-                self.assertEqual(requests, [f"{REPOSITORY}/releases/latest", f"{url}.sha256"])
+        for tag in ["v0.0.1", "v1.2.3"]:
+            for native, expected in [("x86_64", "amd64"), ("amd64", "amd64"),
+                                     ("aarch64", "arm64"), ("arm64", "arm64")]:
+                with self.subTest(tag=tag, native=native):
+                    asset = f"gameap-fastdl-{tag}-linux-{expected}"
+                    result, requests = self.run_script(
+                        'resolve_release; printf "RESULT=%s,%s\\n" "$DOWNLOAD_URL" "$SHA256"',
+                        TEST_ARCH=native,
+                        TEST_RELEASE_URL=f"{REPOSITORY}/releases/tag/{tag}",
+                        TEST_CHECKSUM=f"{DIGEST}  {asset}\n",
+                    )
+                    url = f"{REPOSITORY}/releases/download/{tag}/{asset}"
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"RESULT={url},{DIGEST}", result.stdout)
+                    self.assertEqual(requests, [f"{REPOSITORY}/releases/latest", f"{url}.sha256"])
 
     def test_checksum_formats(self):
-        asset = "gameap-fastdl-linux-amd64"
+        asset = "gameap-fastdl-v1.2.3-linux-amd64"
         for checksum in [DIGEST.upper(), f"{DIGEST}  {asset}\n",
                          f"{DIGEST}\t*{asset}\r\n", f"\n{DIGEST}\n\n"]:
             with self.subTest(checksum=checksum):
@@ -78,7 +82,9 @@ class ReleaseResolutionTests(unittest.TestCase):
 
     def test_missing_or_invalid_checksum_stops_resolution(self):
         for checksum in ["", "z" * 64, "a" * 63, "a" * 65,
-                         f"{DIGEST}  another-binary", f"{DIGEST}  ../gameap-fastdl-linux-amd64",
+                         f"{DIGEST}  another-binary", f"{DIGEST}  ../gameap-fastdl-v1.2.3-linux-amd64",
+                         f"{DIGEST}  gameap-fastdl-v0.0.1-linux-amd64",
+                         f"{DIGEST}  gameap-fastdl-linux-amd64",
                          f"{DIGEST} extra extra", f"{DIGEST}\n{DIGEST}", "x" * 4097]:
             with self.subTest(checksum=checksum[:80]):
                 result, _ = self.run_script(TEST_CHECKSUM=checksum)

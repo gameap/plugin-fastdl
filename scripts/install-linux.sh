@@ -20,7 +20,7 @@
 # same executable and the same unit leaves the running service alone.
 #
 # Invoked by the panel's FastDL plugin as a daemon task:
-#   /bin/bash {node_tools_path}/install-linux.sh \
+#   /bin/bash {node_work_path}/.plugins/fastdla/install-linux.sh \
 #       --install-dir={node_work_path}/.plugins/fastdla \
 #       --config={node_work_path}/.plugins/fastdla/config.json
 
@@ -261,7 +261,6 @@ resolve_release() {
         aarch64|arm64) architecture=arm64 ;;
         *) echo "Error: only amd64 and arm64 releases are available" >&2; return 1 ;;
     esac
-    asset="${COMPONENT}-linux-${architecture}"
     if ! release_url="$(curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
         --head --max-redirs 5 --connect-timeout 15 --max-time 60 --output /dev/null \
         --user-agent gameap-fastdl-installer --write-out '%{url_effective}' \
@@ -279,6 +278,7 @@ resolve_release() {
         echo "Error: the latest release has an invalid tag" >&2
         return 1
     fi
+    asset="${COMPONENT}-${tag}-linux-${architecture}"
     DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${tag}/${asset}"
     checksum="$(_download_release_text "${DOWNLOAD_URL}.sha256" 4096)" || return 1
     if ! SHA256="$(printf '%s\n' "$checksum" | _sidecar_sha256 "$asset")"; then

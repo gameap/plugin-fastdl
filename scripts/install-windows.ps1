@@ -23,7 +23,7 @@ same service definition leaves the running service alone.
 
 Invoked by the panel's FastDL plugin as a daemon task:
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File
-    "{node_tools_path}/install-windows.ps1"
+    "{node_work_path}\.plugins\fastdla\install-windows.ps1"
     -InstallDir "{node_work_path}\.plugins\fastdla"
     -ConfigPath "{node_work_path}\.plugins\fastdla\config.json"
 #>
@@ -476,8 +476,8 @@ function Read-ReleaseChecksum {
 
 function Resolve-Release {
     $architecture = Get-ReleaseArchitecture
-    $asset = "$COMPONENT-windows-$architecture.exe"
     $tag = Get-LatestReleaseTag
+    $asset = "$COMPONENT-$tag-windows-$architecture.exe"
     $url = "https://github.com/$GITHUB_REPO/releases/download/$tag/$asset"
     $checksumPath = [IO.Path]::GetTempFileName()
     try {

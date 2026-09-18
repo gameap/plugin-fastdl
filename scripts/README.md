@@ -10,41 +10,37 @@ manages. One per supported node platform:
 
 ## How they reach a node
 
-The plugin selects the script for the node's OS from
-[`gameap/plugin-fastdl/scripts`](https://github.com/gameap/plugin-fastdl/tree/main/scripts).
-Like `plugin-files` and `plugin-respawn`, it creates two dependent daemon tasks:
-`get-tool <script URL>`, then the installer. The script lives in the daemon's
-configured tools directory, while the binary and configuration remain in the
-private plugin directory.
+Both scripts are bundled into `fastdl.wasm` at build time. The plugin selects the
+script for the node's OS, uploads it through the node file API with mode `0700`
+into `.plugins/fastdla`, and creates one daemon task to run it. The script, binary
+and configuration live in this private directory below the daemon work path.
 
-Linux tasks:
+Each installation replaces the private script with the version bundled in the
+plugin. Old `tools/install-linux.sh` and `tools/install-windows.ps1` files are no
+longer used, so a stale copy in the tools directory cannot affect installation.
+
+Linux task:
 
 ```text
-get-tool https://raw.githubusercontent.com/gameap/plugin-fastdl/main/scripts/install-linux.sh
-/bin/bash '{node_tools_path}/install-linux.sh' \
+/bin/bash '{node_work_path}/.plugins/fastdla/install-linux.sh' \
     '--install-dir={node_work_path}/.plugins/fastdla' \
     '--config={node_work_path}/.plugins/fastdla/config.json'
 ```
 
-Windows tasks (the second command is one line):
+Windows task (the command is one line):
 
 ```text
-get-tool https://raw.githubusercontent.com/gameap/plugin-fastdl/main/scripts/install-windows.ps1
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File
-    "{node_tools_path}/install-windows.ps1"
-    -InstallDir "{node_work_path}/.plugins/fastdla"
-    -ConfigPath "{node_work_path}/.plugins/fastdla/config.json"
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{node_work_path}\.plugins\fastdla\install-windows.ps1" -InstallDir "{node_work_path}\.plugins\fastdla" -ConfigPath "{node_work_path}\.plugins\fastdla\config.json"
 ```
 
-The daemon expands the placeholders before splitting the command into arguments.
-The plugin passes validated absolute install/config paths and quotes them for the
-node's platform. The tools path stays a quoted daemon placeholder to support
-custom tools directories and paths containing spaces.
+The examples use `{node_work_path}` to stand for the node's configured work
+directory. The plugin resolves the installer, install directory and configuration
+to validated absolute paths and quotes them for the node's platform, including
+paths containing spaces.
 
-Script changes must be published to this repository's `main` branch before a
-plugin relying on them is deployed. Keep script options backward compatible:
-each installation downloads the current script independently of the plugin
-version. The contract test in `src/handlers/tests.rs` checks the local options.
+Rebuild and deploy `fastdl.wasm` after changing a script: the plugin and its
+installers are shipped together. The tests in `src/handlers/tests.rs` check the
+uploaded script contents and the installer command for each platform.
 
 ## Automatic releases
 
@@ -54,22 +50,22 @@ the node's native architecture, then fetches the binary and checksum from that
 specific tag. This keeps the two downloads together even if another release is
 published during installation. No extra JSON parser is required on the node.
 
-Publish these assets for each supported target, using the names produced by the
-sibling `gameap-fastdl` project's `make release`:
+Publish these assets for each supported target. The filename includes the exact
+release tag, shown here as `v0.0.1`:
 
-| Target        | Binary asset                      | Checksum asset                           |
-|---------------|-----------------------------------|------------------------------------------|
-| Linux amd64   | `gameap-fastdl-linux-amd64`       | `gameap-fastdl-linux-amd64.sha256`       |
-| Linux arm64   | `gameap-fastdl-linux-arm64`       | `gameap-fastdl-linux-arm64.sha256`       |
-| Windows amd64 | `gameap-fastdl-windows-amd64.exe` | `gameap-fastdl-windows-amd64.exe.sha256` |
-| Windows arm64 | `gameap-fastdl-windows-arm64.exe` | `gameap-fastdl-windows-arm64.exe.sha256` |
+| Target        | Binary asset                             | Checksum asset                                  |
+|---------------|------------------------------------------|-------------------------------------------------|
+| Linux amd64   | `gameap-fastdl-v0.0.1-linux-amd64`       | `gameap-fastdl-v0.0.1-linux-amd64.sha256`       |
+| Linux arm64   | `gameap-fastdl-v0.0.1-linux-arm64`       | `gameap-fastdl-v0.0.1-linux-arm64.sha256`       |
+| Windows amd64 | `gameap-fastdl-v0.0.1-windows-amd64.exe` | `gameap-fastdl-v0.0.1-windows-amd64.exe.sha256` |
+| Windows arm64 | `gameap-fastdl-v0.0.1-windows-arm64.exe` | `gameap-fastdl-v0.0.1-windows-arm64.exe.sha256` |
 
 Each `.sha256` file contains one 64-digit hexadecimal checksum, optionally followed
 by its exact binary filename in `sha256sum` format. Generate it from the trusted
 build output, for example from its `dist` directory:
 
 ```sh
-sha256sum gameap-fastdl-linux-amd64 > gameap-fastdl-linux-amd64.sha256
+sha256sum gameap-fastdl-v0.0.1-linux-amd64 > gameap-fastdl-v0.0.1-linux-amd64.sha256
 ```
 
 A stable release and its binary/checksum assets must exist before automatic
@@ -123,8 +119,8 @@ Both scripts report an installation without changing it, and exit 1 when it is
 unhealthy. The paths are read from the installed service when they are omitted:
 
 ```
-/bin/bash /srv/gameap/tools/install-linux.sh --check
-powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Check
+/bin/bash /srv/gameap/.plugins/fastdla/install-linux.sh --check
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\gameap\.plugins\fastdla\install-windows.ps1" -Check
 ```
 
 ## Testing locally

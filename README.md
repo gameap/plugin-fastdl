@@ -48,10 +48,12 @@ Handlers check permissions, parse requests and delegate to services. Services us
 
 1. Open **Administration → FastDL**, select a node, and save its listen address and public base URL.
 2. Select **Install** and confirm. Use **Update** for an existing installation. The installer and the latest stable binary for the node's OS and architecture are selected automatically.
-3. Wait for installation to complete. The plugin tracks the download and installation tasks and verifies `gameap-fastdl version` after successful service installation.
+3. Wait for installation to complete. The plugin tracks the installation task and verifies `gameap-fastdl version` after successful service installation.
 4. Open a GoldSource or Source server's **FastDL** tab, select its engine and game directory, and activate FastDL.
 
-Installation uses the same daemon task chain as `plugin-files` and `plugin-respawn`: `get-tool` downloads the OS-specific installer from [this repository's scripts directory](https://github.com/gameap/plugin-fastdl/tree/main/scripts), then a dependent task runs it. The installer selects the latest stable [gameap-fastdl release](https://github.com/gameap/gameap-fastdl/releases), detects amd64 or arm64, and downloads the binary and its `.sha256` file from that same release over HTTPS. A published release with both assets is required; missing assets or an invalid checksum fail installation. See [scripts/README.md](scripts/README.md) for the release asset contract.
+The Linux and Windows installers from this repository's `scripts` directory are bundled into `fastdl.wasm`. The plugin uploads the installer for the node's OS into `.plugins/fastdla` and creates one daemon task to run it. Each installation replaces that private copy with the bundled version; old `tools/install-linux.sh` and `tools/install-windows.ps1` files are no longer used. Rebuild and deploy `fastdl.wasm` after changing an installer so the plugin and its script are shipped together.
+
+The installer selects the latest stable [gameap-fastdl release](https://github.com/gameap/gameap-fastdl/releases), detects amd64 or arm64, and downloads the binary and its `.sha256` file from that same release over HTTPS. A published release with both assets is required; missing assets or an invalid checksum fail installation. See [scripts/README.md](scripts/README.md) for the release asset contract.
 
 The installer verifies SHA256 **before executing the binary**, validates configuration, registers or updates the service, and checks that it stays up: both installers poll to a deadline and then require the service to hold for several seconds, because a restart policy makes a crash loop look healthy between restarts. Linux requires root/systemd; Windows requires administrative SCM access. Scripts preserve the previous executable and service definition and roll back any change they made once something fails, reporting a failed update as failed even when rollback restores the previous running version.
 
@@ -82,13 +84,14 @@ Service files live below the daemon work path:
 ```text
 .plugins/fastdla/
   gameap-fastdl[.exe]
+  install-linux.sh or install-windows.ps1
   config.json
   servers.d/server-<private-id>.json
   cache/
   install.<random>/   staging, only while installing
 ```
 
-Installer scripts are downloaded into the daemon tools directory, resolved through `{node_tools_path}`.
+The installer is uploaded through the same node file API as the configuration and runs from this private directory.
 
 The numeric filename is private administrative state; HTTP uses only the independent token. The main JSON configuration is `{ "version": 1, "listen": "0.0.0.0:8080", "servers_dir": "servers.d", "cache_dir": "cache" }`. Each drop-in contains `token`, derived absolute `root`, `engine`, `enabled`, `autoindex`, and `generate_bz2`. The plugin does not offer custom extension allowlists; the Go service enforces its content policy.
 
@@ -107,6 +110,6 @@ All routes are relative to `/api/plugins/fastdla` and require an authenticated s
 | GET    | `/servers/{serverId}/fastdl` | View or manage | Server settings and download URL |
 | PUT    | `/servers/{serverId}/fastdl` | Manage         | Apply server settings            |
 
-Node settings are `{ "listen": "0.0.0.0:8080", "public_base_url": "http://cdn.example" }`. Setup accepts an empty body or `{}` for automatic installation. Existing integrations and custom builds can still pass `{ "download_url": "https://releases.example/gameap-fastdl", "sha256": "<64 hexadecimal digits>" }`; both fields must be supplied together. Setup status includes the download task reference alongside the installation task reference. If the download fails, the output link points to that failed task. A server update accepts `enabled`, `autoindex`, `engine` (`goldsource` or `source`), `game_dir`, `manage_game_config`, and `generate_bz2`. Unknown fields are rejected.
+Node settings are `{ "listen": "0.0.0.0:8080", "public_base_url": "http://cdn.example" }`. Setup accepts an empty body or `{}` for automatic installation. Existing integrations and custom builds can still pass `{ "download_url": "https://releases.example/gameap-fastdl", "sha256": "<64 hexadecimal digits>" }`; both fields must be supplied together. Setup status identifies the installation task. The `download_task_id` field remains available for installations started by earlier plugin versions and is `0` for new installations. A server update accepts `enabled`, `autoindex`, `engine` (`goldsource` or `source`), `game_dir`, `manage_game_config`, and `generate_bz2`. Unknown fields are rejected.
 
 Native Rust tests cover authorization boundaries, traversal and internal-path rejection, scoped helper invocation and failure handling, opaque public responses, install input checks, deletion after storage cleanup, stable private registration filenames, and the exact installer command for each platform together with the options the scripts accept. The frontend has validation/i18n unit tests and a browser smoke check with mocked API responses. `make lint` runs shellcheck over the Linux installer. [scripts/README.md](scripts/README.md) describes running it end to end against a local HTTPS source in a systemd container, including the rollback and re-run cases. Actual Windows service installation must be verified in a provisioned GameAP environment; local checks do not replace that deployment test.

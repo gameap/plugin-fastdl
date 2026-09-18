@@ -13,10 +13,6 @@ use super::{store, sync};
 
 const INSTALLING_TIMEOUT_SECS: i64 = 1800;
 const VERSION_PREFIX: &str = "gameap-fastdl ";
-const LINUX_INSTALL_SCRIPT_URL: &str =
-    "https://raw.githubusercontent.com/gameap/plugin-fastdl/main/scripts/install-linux.sh";
-const WINDOWS_INSTALL_SCRIPT_URL: &str =
-    "https://raw.githubusercontent.com/gameap/plugin-fastdl/main/scripts/install-windows.ps1";
 const LINUX_RESTART_COMMAND: &str = "systemctl restart gameap-fastdl";
 const WINDOWS_RESTART_COMMAND: &str = concat!(
     "powershell -NoProfile -NonInteractive -Command ",
@@ -70,16 +66,23 @@ pub fn setup_node<H: HostApi>(
 ) -> Result<NodeSetupStatus, ApiError> {
     input.validate()?;
     let node = get_node(host, node_id)?;
-    let script_url = match node.os_kind() {
-        NodeOs::Linux => LINUX_INSTALL_SCRIPT_URL,
-        NodeOs::Windows => WINDOWS_INSTALL_SCRIPT_URL,
+    let (script_name, script) = match node.os_kind() {
+        NodeOs::Linux => (
+            "install-linux.sh",
+            include_bytes!("../../scripts/install-linux.sh").as_slice(),
+        ),
+        NodeOs::Windows => (
+            "install-windows.ps1",
+            include_bytes!("../../scripts/install-windows.ps1").as_slice(),
+        ),
         NodeOs::Unsupported => {
             return Err(ApiError::bad_request(
                 "Only Linux and Windows nodes are supported",
             ));
         }
     };
-    let command = installation_command(&node, &input)?;
+    let script_path = format!("{PLUGIN_DIR}/{script_name}");
+    let command = installation_command(&node, &input, &absolute(&node, &script_path)?)?;
 
     if get_status(host, node_id)?.status == SetupStatus::Installing {
         return Err(ApiError::conflict("Installation is already in progress"));
@@ -89,14 +92,14 @@ pub fn setup_node<H: HostApi>(
     config.validate()?;
     sync::write_node_config(host, node_id, &config)?;
 
-    let download_command = shell_join(&["get-tool", script_url]);
-    let download_task_id = host.create_daemon_task(node_id, &download_command, None)?;
-    let task_id = host.create_daemon_task(node_id, &command, Some(download_task_id))?;
+    // Ship the script with the plugin so its options cannot lag behind the
+    // caller or depend on a previously downloaded tool on the node.
+    host.upload(node_id, &script_path, script, 0o700)?;
+    let task_id = host.create_daemon_task(node_id, &command, None)?;
 
     let status = NodeSetupStatus {
         status: SetupStatus::Installing,
         task_id,
-        download_task_id,
         started_at: host.now_unix(),
         ..Default::default()
     };
@@ -148,7 +151,11 @@ pub(super) fn restart<H: HostApi>(host: &mut H, node: &NodeInfo) -> Result<(), A
     Ok(())
 }
 
-fn installation_command(node: &NodeInfo, input: &SetupInput) -> Result<String, ApiError> {
+fn installation_command(
+    node: &NodeInfo,
+    input: &SetupInput,
+    script_path: &str,
+) -> Result<String, ApiError> {
     let config_path = absolute(node, CONFIG_PATH)?;
     let install_dir = absolute(node, PLUGIN_DIR)?;
 
@@ -160,7 +167,7 @@ fn installation_command(node: &NodeInfo, input: &SetupInput) -> Result<String, A
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            "{node_tools_path}/install-windows.ps1",
+            script_path,
         ];
         if !input.download_url.is_empty() {
             args.extend([
@@ -175,14 +182,14 @@ fn installation_command(node: &NodeInfo, input: &SetupInput) -> Result<String, A
     }
 
     // The daemon splits the command itself and never runs a shell, so the
-    // interpreter is named rather than relying on the shebang: a tools path
-    // mounted noexec would otherwise defeat the downloaded script's mode.
+    // interpreter is named rather than relying on the shebang: a work path
+    // mounted noexec would otherwise defeat the uploaded script's mode.
     let download_url = format!("--download-url={}", input.download_url);
     let sha256 = format!("--sha256={}", input.sha256);
     let install_dir = format!("--install-dir={install_dir}");
     let config_path = format!("--config={config_path}");
 
-    let mut args = vec!["/bin/bash", "{node_tools_path}/install-linux.sh"];
+    let mut args = vec!["/bin/bash", script_path];
     if !input.download_url.is_empty() {
         args.extend([download_url.as_str(), sha256.as_str()]);
     }

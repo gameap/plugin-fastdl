@@ -39,16 +39,21 @@ function Save-Download {
 $originalArchitecture = $env:PROCESSOR_ARCHITECTURE
 $originalNativeArchitecture = $env:PROCESSOR_ARCHITEW6432
 try {
-    foreach ($case in @(@("AMD64", "", "amd64"), @("ARM64", "", "arm64"), @("x86", "AMD64", "amd64"), @("x86", "ARM64", "arm64"))) {
-        $env:PROCESSOR_ARCHITECTURE = $case[0]
-        $env:PROCESSOR_ARCHITEW6432 = $case[1]
-        $script:requests = @()
-        $release = Resolve-Release
-        $expectedUrl = "$repository/releases/download/v1.2.3/gameap-fastdl-windows-$($case[2]).exe"
-        Assert-Equal $expectedUrl $release.DownloadUrl
-        Assert-Equal $digest $release.Sha256
-        Assert-Equal 1 $script:requests.Count
-        Assert-Equal "$expectedUrl.sha256" $script:requests[0]
+    foreach ($tag in @("v0.0.1", "v1.2.3")) {
+        $script:releaseUri = "$repository/releases/tag/$tag"
+        foreach ($case in @(@("AMD64", "", "amd64"), @("ARM64", "", "arm64"), @("x86", "AMD64", "amd64"), @("x86", "ARM64", "arm64"))) {
+            $env:PROCESSOR_ARCHITECTURE = $case[0]
+            $env:PROCESSOR_ARCHITEW6432 = $case[1]
+            $asset = "gameap-fastdl-$tag-windows-$($case[2]).exe"
+            $script:checksum = "$digest  $asset`n"
+            $script:requests = @()
+            $release = Resolve-Release
+            $expectedUrl = "$repository/releases/download/$tag/$asset"
+            Assert-Equal $expectedUrl $release.DownloadUrl
+            Assert-Equal $digest $release.Sha256
+            Assert-Equal 1 $script:requests.Count
+            Assert-Equal "$expectedUrl.sha256" $script:requests[0]
+        }
     }
 
     $env:PROCESSOR_ARCHITECTURE = "x86"
@@ -64,12 +69,13 @@ try {
             "$repository/releases/tag/v1.2.3`n", "$repository/releases/tag/$("v" * 129)")) {
         Assert-Fails { Get-ReleaseTagFromUri -ReleaseUri $value }
     }
-    $asset = "gameap-fastdl-windows-amd64.exe"
+    $asset = "gameap-fastdl-v1.2.3-windows-amd64.exe"
     foreach ($value in @($digest.ToUpperInvariant(), "$digest  $asset`n", "$digest`t*$asset`r`n")) {
         Assert-Equal $digest (Read-ReleaseChecksum -Content $value -Asset $asset)
     }
     foreach ($value in @("", ("z" * 64), ("a" * 63), ("a" * 65), "$digest  another-binary",
-            "$digest  ../$asset", "$digest extra extra", "$digest`n$digest")) {
+            "$digest  ../$asset", "$digest  gameap-fastdl-v0.0.1-windows-amd64.exe",
+            "$digest  gameap-fastdl-windows-amd64.exe", "$digest extra extra", "$digest`n$digest")) {
         Assert-Fails { Read-ReleaseChecksum -Content $value -Asset $asset }
     }
     $script:downloadFails = $true
