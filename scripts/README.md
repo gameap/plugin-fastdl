@@ -129,6 +129,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Check
 
 ## Testing locally
 
+Run `make test-scripts` for release-resolution tests with mocked downloads. These
+cover architecture selection, same-tag binary/checksum URLs, missing releases,
+malformed checksums, and custom download overrides without touching services.
+The Linux tests use Python 3 and Bash. The Windows suite also parses the full
+installer and runs under PowerShell on any OS; set `POWERSHELL=powershell` or an
+absolute executable path if it is not named `pwsh`. It is skipped when that
+executable is unavailable.
+
 `install-linux.sh` can be exercised end to end in a systemd container, against a
 real HTTPS source, without weakening the script:
 
