@@ -1,7 +1,7 @@
 <template>
   <div class="fastdl-tab" :class="{ 'fastdl-tab-with-save': data?.can_manage }">
     <div class="fastdl-actions">
-      <GButton type="button" color="white" :loading="loading" :disabled="saving || applyingConfiguration || dirty" @click="load">
+      <GButton type="button" color="white" size="small" :loading="loading" :disabled="saving || applyingConfiguration || dirty" @click="load">
         <GIcon name="refresh" class="mr-1" />{{ trans('refresh') }}
       </GButton>
     </div>
