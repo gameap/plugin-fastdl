@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  # Keep these SDK revisions in sync with build.yml.
+  GAMEAP_REF: 2141281953207e6964fa7923e703832b89646d9c
+  GAMEAP_PROTO_REF: aba9a6c002358ed56691ff1f5c28d448e5f2cdee
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin-fastdl
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: gameap/gameap
+          ref: ${{ env.GAMEAP_REF }}
+          path: gameap-api
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: gameap/gameap-proto
+          ref: ${{ env.GAMEAP_PROTO_REF }}
+          path: gameap-proto
+          persist-credentials: false
+
+      # Build signed artifacts without restoring dependency caches.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set version from tag
+        working-directory: plugin-fastdl
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release tag '$TAG' is not a semver tag (expected v1.2.3 or v1.2.3-rc.1)"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          sed -i "s/^version = \".*\"$/version = \"${VERSION}\"/" Cargo.toml
+          sed -i "0,/^  \"version\": \".*\",$/s//  \"version\": \"${VERSION}\",/" frontend/package.json
+          grep -q "^version = \"${VERSION}\"$" Cargo.toml
+          grep -q "^  \"version\": \"${VERSION}\",$" frontend/package.json
+
+      # The npm UI package lacks icons; use the package from the SDK checkout.
+      - name: Build plugin SDK
+        working-directory: gameap-api/web/plugin-sdk
+        run: |
+          npm ci
+          npm install --no-save ../frontend/packages/gameap-ui
+          npx vite build
+
+      - name: Build frontend
+        working-directory: plugin-fastdl/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Set up Rust
+        working-directory: plugin-fastdl
+        run: rustup toolchain install
+
+      - name: Build wasm
+        working-directory: plugin-fastdl
+        run: make wasm
+
+      - name: Sign wasm
+        working-directory: plugin-fastdl
+        env:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+        run: |
+          if [ -z "$GPG_SIGNING_KEY" ]; then
+            echo "::error::GPG_SIGNING_KEY secret is not set"
+            exit 1
+          fi
+          printf '%s' "$GPG_SIGNING_KEY" | gpg --batch --import
+          gpg --batch --yes --detach-sign --armor -o fastdl.wasm.asc fastdl.wasm
+
+      - name: Publish to plugins.gameap.dev
+        working-directory: plugin-fastdl
+        env:
+          GAMEAP_DEPLOY_TOKEN: ${{ secrets.GAMEAP_DEPLOY_TOKEN }}
+          GAMEAP_PLUGIN_ID: ${{ vars.GAMEAP_PLUGIN_ID }}
+          TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          if [ -z "$GAMEAP_PLUGIN_ID" ]; then
+            echo "::error::GAMEAP_PLUGIN_ID repository variable is not set"
+            exit 1
+          fi
+          if [ -z "$GAMEAP_DEPLOY_TOKEN" ]; then
+            echo "::error::GAMEAP_DEPLOY_TOKEN secret is not set"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          printf '%s' "$RELEASE_BODY" > "$RUNNER_TEMP/changelog.md"
+          ARGS=(-sS
+            --connect-timeout 30
+            --max-time 600
+            -o "$RUNNER_TEMP/response.json"
+            -w "%{http_code}"
+            -H "Authorization: Bearer ${GAMEAP_DEPLOY_TOKEN}"
+            -F "version=${VERSION}"
+            -F "file=@fastdl.wasm"
+            -F "signature=@fastdl.wasm.asc"
+            -F "changelog=<${RUNNER_TEMP}/changelog.md")
+          if [ "$PRERELEASE" != "true" ]; then
+            ARGS+=(-F "is_stable=true")
+          fi
+          STATUS=$(curl "${ARGS[@]}" \
+            "https://plugins.gameap.dev/api/ci/plugins/${GAMEAP_PLUGIN_ID}/versions")
+          cat "$RUNNER_TEMP/response.json"
+          echo
+          if [ "$STATUS" != "201" ]; then
+            echo "::error::Publish failed with HTTP $STATUS"
+            exit 1
+          fi
+
+      - name: Attach artifacts to GitHub release
+        working-directory: plugin-fastdl
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" fastdl.wasm fastdl.wasm.asc --clobber

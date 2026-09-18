@@ -1,0 +1,94 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep these SDK revisions in sync with release.yml.
+  GAMEAP_REF: 2141281953207e6964fa7923e703832b89646d9c
+  GAMEAP_PROTO_REF: aba9a6c002358ed56691ff1f5c28d448e5f2cdee
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin-fastdl
+          persist-credentials: false
+
+      # Both SDKs are file/path dependencies and require sibling checkouts.
+      - uses: actions/checkout@v4
+        with:
+          repository: gameap/gameap
+          ref: ${{ env.GAMEAP_REF }}
+          path: gameap-api
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: gameap/gameap-proto
+          ref: ${{ env.GAMEAP_PROTO_REF }}
+          path: gameap-proto
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            gameap-api/web/plugin-sdk/package-lock.json
+            plugin-fastdl/frontend/package-lock.json
+
+      # The npm UI package lacks icons; the local package lacks declarations.
+      # Use the checked-out UI and a shim to emit the SDK declarations.
+      - name: Build plugin SDK
+        working-directory: gameap-api/web/plugin-sdk
+        run: |
+          npm ci
+          npm install --no-save ../frontend/packages/gameap-ui
+          echo "declare module '@gameap/ui';" > src/gameap-ui-shim.d.ts
+          npx vite build
+          npx tsc --emitDeclarationOnly
+
+      - name: Build frontend
+        working-directory: plugin-fastdl/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Set up Rust
+        working-directory: plugin-fastdl
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plugin-fastdl
+
+      - name: Test
+        working-directory: plugin-fastdl
+        run: make test
+
+      - name: Lint
+        working-directory: plugin-fastdl
+        run: make lint
+
+      - name: Build wasm
+        working-directory: plugin-fastdl
+        run: make wasm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fastdl-wasm
+          path: plugin-fastdl/fastdl.wasm
+          if-no-files-found: error
