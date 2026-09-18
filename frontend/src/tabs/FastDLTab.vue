@@ -2,7 +2,7 @@
   <div class="mt-2 space-y-4">
     <div class="flex flex-wrap items-center gap-3">
       <GButton type="button" color="white" :loading="loading" :disabled="saving || dirty" @click="load"><GIcon name="refresh" class="mr-1" />{{ trans('refresh') }}</GButton>
-      <GStatusBadge v-if="data" :color="data.enabled ? 'green' : 'stone'" :text="trans(data.enabled ? 'active' : 'disabled')" />
+      <GStatusBadge v-if="data" :color="!applied ? 'orange' : data.enabled ? 'green' : 'stone'" :text="trans(!applied ? 'not_applied' : data.enabled ? 'active' : 'disabled')" />
     </div>
     <NAlert v-if="error" type="error">{{ error }}</NAlert>
     <div v-if="loading && !data" class="py-8 text-center"><NSpin /></div>
@@ -41,13 +41,13 @@
           <GButton type="button" v-if="data.can_manage" color="black" :loading="saving" :disabled="locked || !pendingApply || (form.enabled && !data.node_ready)" @click="save"><GIcon name="save" class="mr-1" />{{ trans('save') }}</GButton>
         </form>
       </NCard>
-      <NCard v-if="data.download_url && data.enabled" :title="trans('download_url')" size="small">
+      <NCard v-if="applied && data.download_url && data.enabled" :title="trans('download_url')" size="small">
         <div class="flex flex-wrap items-start gap-2">
           <NInput :value="data.download_url" readonly :input-props="{ 'aria-label': trans('download_url') }" style="flex: 1; min-width: min(100%, 260px)" />
           <GButton type="button" color="black" @click="copy(data.download_url)"><GIcon name="copy" class="mr-1" />{{ trans('copy') }}</GButton>
         </div>
       </NCard>
-      <NCard v-if="data.enabled && data.configuration.length" :title="trans('game_configuration')" size="small">
+      <NCard v-if="applied && data.enabled && data.configuration.length" :title="trans('game_configuration')" size="small">
         <div class="space-y-3">
           <NAlert type="info">{{ trans(data.manage_game_config ? 'config_apply_hint' : 'manual_config_hint') }}</NAlert>
           <pre class="fastdl-configuration" tabindex="0">{{ data.configuration.join('\n') }}</pre>
@@ -75,8 +75,10 @@ const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
 const copyError = ref(false);
+const saveFailed = ref(false);
+const applied = computed(() => data.value?.synced === true && !saveFailed.value);
 const dirty = computed(() => data.value !== null && settingsChanged(form, data.value));
-const pendingApply = computed(() => data.value !== null && needsApply(form, data.value));
+const pendingApply = computed(() => data.value !== null && (saveFailed.value || needsApply(form, data.value)));
 const warnings = computed(() => data.value ? serverWarnings(data.value, trans) : []);
 const locked = computed(() => saving.value || loading.value || !data.value?.can_manage);
 let generation = 0;
@@ -91,9 +93,10 @@ async function load() {
     const result = await fastdlApi.server(serverId);
     if (disposed || request !== generation) return;
     data.value = result;
+    saveFailed.value = false;
     Object.assign(form, editableSettings(result));
   } catch (e) {
-    if (!disposed && request === generation) error.value = errorMessage(e, trans('load_failed'));
+    if (!disposed && request === generation) error.value = errorMessage(e, trans('load_failed'), trans);
   } finally {
     if (!disposed && request === generation) loading.value = false;
   }
@@ -103,16 +106,34 @@ async function save() {
   if (locked.value || !pendingApply.value || (form.enabled && !data.value?.node_ready)) return;
   if (!isGameDirectory(form.game_dir.trim())) { error.value = trans('game_dir_invalid'); return; }
   const request = ++generation;
+  const serverId = props.serverId;
+  const submittedSettings = { ...form, game_dir: form.game_dir.trim() };
   saving.value = true;
   error.value = '';
   try {
-    const result = await fastdlApi.saveServer(props.serverId, { ...form, game_dir: form.game_dir.trim() });
+    const result = await fastdlApi.saveServer(serverId, submittedSettings);
     if (disposed || request !== generation) return;
     data.value = result;
+    saveFailed.value = false;
     Object.assign(form, editableSettings(result));
     window.$message?.success(trans('saved'));
   } catch (e) {
-    if (!disposed && request === generation) error.value = errorMessage(e, trans('save_failed'));
+    if (disposed || request !== generation) return;
+    error.value = errorMessage(e, trans('save_failed'), trans);
+    saveFailed.value = true;
+    try {
+      const result = await fastdlApi.server(serverId);
+      if (disposed || request !== generation) return;
+      data.value = result;
+      if (result.synced && !settingsChanged(submittedSettings, result)) {
+        saveFailed.value = false;
+        error.value = '';
+        Object.assign(form, editableSettings(result));
+        window.$message?.success(trans('synced'));
+      }
+    } catch {
+      // Keep the save error and draft when the node is still unavailable.
+    }
   } finally {
     if (!disposed && request === generation) saving.value = false;
   }
@@ -131,6 +152,7 @@ async function copy(value: string) {
 watch(() => props.serverId, () => {
   data.value = null;
   saving.value = false;
+  saveFailed.value = false;
   copyError.value = false;
   void load();
 }, { immediate: true });

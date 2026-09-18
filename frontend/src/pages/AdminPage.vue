@@ -34,7 +34,7 @@
         </div>
       </NCard>
     </div>
-    <NodeSettings v-if="settingsNode" :key="settingsNode.id" :node="settingsNode" @close="settingsNode = null" @saved="onSettingsSaved" />
+    <NodeSettings v-if="settingsNode" :key="settingsNode.id" :node="settingsNode" @close="onSettingsClosed" @saved="onSettingsClosed" />
     <NodeInstall v-if="installNode" :key="installNode.id" :node="installNode" @close="installNode = null" @started="onInstallStarted" />
   </div>
 </template>
@@ -102,7 +102,7 @@ async function load() {
     schedulePoll();
   } catch (e) {
     if (!disposed && request === generation) {
-      error.value = errorMessage(e, trans('load_failed'));
+      error.value = errorMessage(e, trans('load_failed'), trans);
       schedulePoll();
     }
   } finally {
@@ -110,7 +110,7 @@ async function load() {
   }
 }
 
-function onSettingsSaved() {
+function onSettingsClosed() {
   settingsNode.value = null;
   void load();
 }
@@ -131,7 +131,7 @@ async function sync(node: FastDLNode) {
     await fastdlApi.sync(node.id);
     if (!disposed) window.$message?.success(trans('synced'));
   } catch (e) {
-    if (!disposed) error.value = errorMessage(e, trans('sync_failed'));
+    if (!disposed) error.value = errorMessage(e, trans('sync_failed'), trans, 'node-sync');
   } finally {
     operatingId.value = null;
   }

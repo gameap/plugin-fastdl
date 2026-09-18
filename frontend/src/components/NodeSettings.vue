@@ -15,6 +15,7 @@
         </div>
       </NFormItem>
       <NAlert type="info">{{ trans('network_notice') }}</NAlert>
+      <p class="text-sm text-stone-500">{{ trans('node_save_hint') }}</p>
       <div class="flex flex-wrap gap-2">
         <GButton type="button" color="black" :loading="saving" @click="save"><GIcon name="save" class="mr-1" />{{ trans('save') }}</GButton>
         <GButton type="button" color="black" :disabled="saving" @click="close">{{ trans('cancel') }}</GButton>
@@ -53,7 +54,7 @@ async function save() {
     window.$message?.success(trans('saved'));
     emit('saved');
   } catch (e) {
-    error.value = errorMessage(e, trans('save_failed'));
+    error.value = errorMessage(e, trans('save_failed'), trans, 'node-save');
   } finally {
     saving.value = false;
   }
