@@ -386,7 +386,10 @@ _rollback() {
         if [ -n "$HAD_UNIT" ]; then
             cp -p "${STAGING}/previous.service" "$UNIT_FILE" 2>/dev/null || true
             systemctl daemon-reload > /dev/null 2>&1 || true
-            if [ -n "$WAS_ENABLED" ]; then
+            if [ "$WAS_ENABLED" = "enabled-runtime" ]; then
+                systemctl disable "$UNIT_NAME" > /dev/null 2>&1 || true
+                systemctl enable --runtime "$UNIT_NAME" > /dev/null 2>&1 || true
+            elif [ -n "$WAS_ENABLED" ]; then
                 systemctl enable "$UNIT_NAME" > /dev/null 2>&1 || true
             else
                 systemctl disable "$UNIT_NAME" > /dev/null 2>&1 || true
@@ -410,7 +413,7 @@ _rollback() {
         if [ "$restored_state" != "active" ]; then
             echo "Warning: the previous ${COMPONENT} service could not be restarted (state: ${restored_state:-unknown}); this node is left with FastDL stopped." >&2
         fi
-    elif [ -z "$HAD_UNIT" ]; then
+    else
         systemctl stop "$UNIT_NAME" > /dev/null 2>&1 || true
     fi
 }
@@ -625,7 +628,8 @@ fi
 [ ! -f "$UNIT_FILE" ] || HAD_UNIT="1"
 [ "$(_unit_active_state)" != "active" ] || WAS_ACTIVE="1"
 case "$(_unit_enabled_state)" in
-    enabled|enabled-runtime|static) WAS_ENABLED="1" ;;
+    enabled-runtime) WAS_ENABLED="enabled-runtime" ;;
+    enabled|static) WAS_ENABLED="1" ;;
 esac
 
 STAGED="${STAGING}/${COMPONENT}"
@@ -725,16 +729,16 @@ echo "Restarting ${UNIT_NAME}..."
 
 CHANGED="1"
 systemctl reset-failed "$UNIT_NAME" > /dev/null 2>&1 || true
+restart_baseline="$(_unit_restarts)"
 _systemctl_or_die restart "$UNIT_NAME"
 
-restart_baseline="$(_unit_restarts)"
 settled=0
 waited=0
 
 while [ "$waited" -lt "$START_TIMEOUT_SECS" ]; do
     if [ "$(_unit_active_state)" = "active" ]; then
         settled=$((settled + 1))
-        [ "$settled" -lt "$SETTLE_SECS" ] || break
+        [ "$settled" -le "$SETTLE_SECS" ] || break
     else
         settled=0
     fi
@@ -742,7 +746,7 @@ while [ "$waited" -lt "$START_TIMEOUT_SECS" ]; do
     waited=$((waited + 1))
 done
 
-if [ "$settled" -lt "$SETTLE_SECS" ]; then
+if [ "$settled" -le "$SETTLE_SECS" ]; then
     echo "Error: ${UNIT_NAME} did not stay active for ${SETTLE_SECS}s within ${START_TIMEOUT_SECS}s (state: $(_unit_active_state), restarts: $(_unit_restarts))." >&2
     _report_unit_failure
     exit 1
