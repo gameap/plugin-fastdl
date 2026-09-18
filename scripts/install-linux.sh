@@ -629,7 +629,7 @@ fi
 [ "$(_unit_active_state)" != "active" ] || WAS_ACTIVE="1"
 case "$(_unit_enabled_state)" in
     enabled-runtime) WAS_ENABLED="enabled-runtime" ;;
-    enabled|static) WAS_ENABLED="1" ;;
+    enabled) WAS_ENABLED="1" ;;
 esac
 
 STAGED="${STAGING}/${COMPONENT}"
