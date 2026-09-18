@@ -76,12 +76,18 @@ pub struct NodeSetupStatus {
     pub status: SetupStatus,
     pub version: String,
     pub task_id: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub download_task_id: u64,
     pub error_message: String,
     pub started_at: i64,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct SetupInput {
     pub download_url: String,
     pub sha256: String,
@@ -89,6 +95,14 @@ pub struct SetupInput {
 
 impl SetupInput {
     pub fn validate(&self) -> Result<(), ApiError> {
+        if self.download_url.is_empty() && self.sha256.is_empty() {
+            return Ok(());
+        }
+        if self.download_url.is_empty() || self.sha256.is_empty() {
+            return Err(ApiError::bad_request(
+                "Custom downloads require both an HTTPS URL and SHA256",
+            ));
+        }
         validate_url(&self.download_url, true)?;
 
         if self.sha256.len() != 64 || !self.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {

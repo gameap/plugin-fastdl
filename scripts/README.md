@@ -3,38 +3,86 @@
 Installers for `gameap-fastdl`, the node-side Go service the FastDL plugin
 manages. One per supported node platform:
 
-| Script                 | Platform             | Service                    |
-|------------------------|----------------------|----------------------------|
-| `install-linux.sh`     | Linux, root, systemd | `gameap-fastdl.service`    |
-| `install-windows.ps1`  | Windows, elevated    | `gameap-fastdl` SCM service |
+| Script                | Platform             | Service                     |
+|-----------------------|----------------------|-----------------------------|
+| `install-linux.sh`    | Linux, root, systemd | `gameap-fastdl.service`     |
+| `install-windows.ps1` | Windows, elevated    | `gameap-fastdl` SCM service |
 
 ## How they reach a node
 
-Unlike the installers in the [`gameap/scripts`](https://github.com/gameap/scripts)
-repository, these are **not** fetched with `get-tool`. They are compiled into
-`fastdl.wasm` with `include_bytes!` (`src/services/node_setup.rs`), uploaded to
-`<work path>/.plugins/fastdla/` with mode `0700` and run as a single daemon task:
+The plugin selects the script for the node's OS from
+[`gameap/plugin-fastdl/scripts`](https://github.com/gameap/plugin-fastdl/tree/main/scripts).
+Like `plugin-files` and `plugin-respawn`, it creates two dependent daemon tasks:
+`get-tool <script URL>`, then the installer. The script lives in the daemon's
+configured tools directory, while the binary and configuration remain in the
+private plugin directory.
 
-```
-/bin/bash {node_work_path}/.plugins/fastdla/install-linux.sh \
-    --download-url=https://... --sha256=<64 hex characters> \
-    --install-dir={node_work_path}/.plugins/fastdla \
-    --config={node_work_path}/.plugins/fastdla/config.json
+Linux tasks:
+
+```text
+get-tool https://raw.githubusercontent.com/gameap/plugin-fastdl/main/scripts/install-linux.sh
+/bin/bash '{node_tools_path}/install-linux.sh' \
+    '--install-dir={node_work_path}/.plugins/fastdla' \
+    '--config={node_work_path}/.plugins/fastdla/config.json'
 ```
 
-```
+Windows tasks (the second command is one line):
+
+```text
+get-tool https://raw.githubusercontent.com/gameap/plugin-fastdl/main/scripts/install-windows.ps1
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File
-    "{node_work_path}\.plugins\fastdla\install-windows.ps1"
-    -DownloadUrl https://... -Sha256 <64 hex characters>
-    -InstallDir "{node_work_path}\.plugins\fastdla"
-    -ConfigPath "{node_work_path}\.plugins\fastdla\config.json"
+    "{node_tools_path}/install-windows.ps1"
+    -InstallDir "{node_work_path}/.plugins/fastdla"
+    -ConfigPath "{node_work_path}/.plugins/fastdla/config.json"
 ```
 
-**Editing a script therefore requires `make build` and a plugin upload.** A node
-never sees a newer script than the plugin that uploaded it, which is why the two
-argument lists can change together without a compatibility window.
-`installers_accept_the_options_the_plugin_passes` in `src/handlers/tests.rs`
-fails if an option is renamed on only one side.
+The daemon expands the placeholders before splitting the command into arguments.
+The plugin passes validated absolute install/config paths and quotes them for the
+node's platform. The tools path stays a quoted daemon placeholder to support
+custom tools directories and paths containing spaces.
+
+Script changes must be published to this repository's `main` branch before a
+plugin relying on them is deployed. Keep script options backward compatible:
+each installation downloads the current script independently of the plugin
+version. The contract test in `src/handlers/tests.rs` checks the local options.
+
+## Automatic releases
+
+With no download options, the script resolves GitHub's latest stable release of
+[`gameap/gameap-fastdl`](https://github.com/gameap/gameap-fastdl/releases), detects
+the node's native architecture, then fetches the binary and checksum from that
+specific tag. This keeps the two downloads together even if another release is
+published during installation. No extra JSON parser is required on the node.
+
+Publish these assets for each supported target, using the names produced by the
+sibling `gameap-fastdl` project's `make release`:
+
+| Target        | Binary asset                      | Checksum asset                           |
+|---------------|-----------------------------------|------------------------------------------|
+| Linux amd64   | `gameap-fastdl-linux-amd64`       | `gameap-fastdl-linux-amd64.sha256`       |
+| Linux arm64   | `gameap-fastdl-linux-arm64`       | `gameap-fastdl-linux-arm64.sha256`       |
+| Windows amd64 | `gameap-fastdl-windows-amd64.exe` | `gameap-fastdl-windows-amd64.exe.sha256` |
+| Windows arm64 | `gameap-fastdl-windows-arm64.exe` | `gameap-fastdl-windows-arm64.exe.sha256` |
+
+Each `.sha256` file contains one 64-digit hexadecimal checksum, optionally followed
+by its exact binary filename in `sha256sum` format. Generate it from the trusted
+build output, for example from its `dist` directory:
+
+```sh
+sha256sum gameap-fastdl-linux-amd64 > gameap-fastdl-linux-amd64.sha256
+```
+
+A stable release and its binary/checksum assets must exist before automatic
+installation can succeed. Unsupported architectures, missing releases/assets,
+invalid checksum files, and checksum mismatches fail with a diagnostic in the
+daemon task output. Existing installations remain available when release
+resolution or verification fails.
+
+For custom builds, pass both `--download-url=URL` and `--sha256=HEX` on Linux, or
+`-DownloadUrl URL -Sha256 HEX` on Windows. These bypass release discovery and
+retain the same HTTPS and checksum validation. Passing only one is rejected.
+The plugin's setup API retains this optional pair for existing integrations;
+the installation form uses automatic selection.
 
 ## What each step is for
 
@@ -48,8 +96,9 @@ fails if an option is renamed on only one side.
 3. **Download over HTTPS only.** Redirects are re-checked for scheme and
    credentials at every hop, and the size cap is enforced while reading, not just
    from `Content-Length`.
-4. **Verify SHA256 before executing anything.** This ordering is the reason the
-   digest is passed in at all; nothing runs the download before it matches.
+4. **Verify SHA256 before executing anything.** The expected digest comes from
+   the release checksum asset or the explicit custom-build option; nothing runs
+   the download before it matches.
 5. **Validate the configuration** with `gameap-fastdl validate --config`, before
    the service definition is touched, so a bad configuration is one readable
    message instead of a restart loop.
@@ -64,7 +113,7 @@ fails if an option is renamed on only one side.
    and service definition are restored and the service is put back the way it
    was. A failed rollback says so loudly rather than leaving a node silently down.
 
-Re-running with the same `--sha256` skips the download and, when the service
+Re-running with the same resolved or supplied SHA256 skips the binary download and, when the service
 definition also matches and the service is running, changes nothing at all — so
 a re-run is a safe way to repair a damaged service without an outage.
 
@@ -74,7 +123,7 @@ Both scripts report an installation without changing it, and exit 1 when it is
 unhealthy. The paths are read from the installed service when they are omitted:
 
 ```
-/bin/bash /srv/gameap/.plugins/fastdla/install-linux.sh --check
+/bin/bash /srv/gameap/tools/install-linux.sh --check
 powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Check
 ```
 

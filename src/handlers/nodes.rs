@@ -17,7 +17,11 @@ pub fn setup<H: HostApi>(host: &mut H, parts: &RequestParts) -> ApiResult {
     let node_id = parse_u64_param(&parts.params, "nodeId")?;
     auth::require_admin(host, parts)?;
     node_setup::get_node(host, node_id)?;
-    let input: SetupInput = parse_json_body(parts.body)?;
+    let input: SetupInput = if parts.body.is_empty() {
+        SetupInput::default()
+    } else {
+        parse_json_body(parts.body)?
+    };
 
     let status = node_setup::setup_node(host, node_id, input)?;
     Ok(json_response(202, &status))

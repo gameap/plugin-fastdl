@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { editableSettings, isDownloadUrl, isGameDirectory, isListenAddress, isPublicUrl, needsApply, normalizeNodeConfig, serverWarnings, settingsChanged } from '../lib/settings';
+import { editableSettings, isGameDirectory, isListenAddress, isPublicUrl, needsApply, normalizeNodeConfig, serverWarnings, settingsChanged } from '../lib/settings';
 import type { ServerFastDL } from '../api';
 import { translations } from '../translations';
 
@@ -35,19 +35,12 @@ describe('public download address', () => {
   });
 });
 
-describe('installation fields', () => {
+describe('node listen address', () => {
   it.each(['0.0.0.0:8080', '[::]:8080', '[::1]:9000', '127.0.0.1:8080'])('accepts listen address %s', (address) => {
     expect(isListenAddress(address)).toBe(true);
   });
   it.each(['0.0.0.0', 'localhost:9000', ':8080', 'localhost:0', '127.0.0.1:65536', 'localhost:abc', '::1:8080', 'host:8080\ncommand', '999.1.2.3:80', '127.00.0.1:80'])('rejects invalid listen address %s', (address) => {
     expect(isListenAddress(address)).toBe(false);
-  });
-  it('requires HTTPS binaries without credentials or fragments', () => {
-    expect(isDownloadUrl('https://example.com/gameap-fastdl')).toBe(true);
-    expect(isDownloadUrl('https://example.com/gameap-fastdl?version=1')).toBe(false);
-    expect(isDownloadUrl('http://example.com/gameap-fastdl')).toBe(false);
-    expect(isDownloadUrl('https://user:pass@example.com/gameap-fastdl')).toBe(false);
-    expect(isDownloadUrl('https://example.com/gameap-fastdl#checksum')).toBe(false);
   });
 });
 

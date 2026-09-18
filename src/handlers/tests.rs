@@ -97,19 +97,10 @@ fn enable_server(host: &mut MockHost) {
 }
 
 fn start_installation(host: &mut MockHost) -> u64 {
-    let response = router::dispatch(
-        host,
-        &request(
-            1,
-            "POST",
-            "/nodes/1/setup",
-            json!({
-                "download_url": "https://releases.example/gameap-fastdl",
-                "sha256": "a".repeat(64),
-            }),
-        ),
-    );
+    let response = router::dispatch(host, &request(1, "POST", "/nodes/1/setup", json!({})));
     assert_eq!(response.status_code, 202);
+    let download_id = host.created_tasks[0].0;
+    host.task_states.get_mut(&download_id).unwrap().status = TaskStatus::Success;
 
     host.created_tasks
         .last()
@@ -297,11 +288,13 @@ fn configuration_helper_failure_keeps_route_disabled_and_unsynced() {
 }
 
 #[test]
-fn installation_requires_https_and_digest() {
+fn custom_installation_requires_https_and_digest() {
     for (url, digest) in [
         ("http://example.com/gameap-fastdl", "a".repeat(64)),
         ("https://example.com/file", "bad".into()),
         ("https://example.com/$(touch evil)", "a".repeat(64)),
+        ("https://example.com/file", String::new()),
+        ("", "a".repeat(64)),
     ] {
         assert!(
             SetupInput {
@@ -468,7 +461,148 @@ fn cannot_clear_public_url_while_any_server_is_enabled() {
 }
 
 #[test]
-fn linux_and_windows_install_tasks_embed_verified_installer_inputs() {
+fn automatic_installation_uses_the_node_platform_and_saved_configuration() {
+    for os in ["linux", " Windows ", ""] {
+        for empty_body in [false, true] {
+            let mut host = installed_host();
+            let node = host.nodes.get_mut(&1).unwrap();
+            node.os = os.into();
+            node.work_path = if os == " Windows " {
+                r"C:\GameAP Data".into()
+            } else {
+                "/srv/gameap data".into()
+            };
+            let mut req = request(1, "POST", "/nodes/1/setup", json!({}));
+            if empty_body {
+                req.body.clear();
+            }
+            let response = router::dispatch(&mut host, &req);
+            assert_eq!(response.status_code, 202);
+            assert_eq!(host.created_tasks.len(), 2);
+            let download = &host.created_tasks[0];
+            let install = &host.created_tasks[1];
+            assert_eq!(download.3, None);
+            assert_eq!(install.3, Some(download.0));
+            let (script, expected) = if os == " Windows " {
+                (
+                    "install-windows.ps1",
+                    concat!(
+                        "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass ",
+                        r#"-File "{node_tools_path}/install-windows.ps1" "#,
+                        r#"-InstallDir "C:\GameAP Data\.plugins\fastdla" "#,
+                        r#"-ConfigPath "C:\GameAP Data\.plugins\fastdla\config.json""#,
+                    ),
+                )
+            } else {
+                (
+                    "install-linux.sh",
+                    concat!(
+                        "/bin/bash '{node_tools_path}/install-linux.sh' ",
+                        "'--install-dir=/srv/gameap data/.plugins/fastdla' ",
+                        "'--config=/srv/gameap data/.plugins/fastdla/config.json'",
+                    ),
+                )
+            };
+            assert_eq!(
+                download.2,
+                format!(
+                    "get-tool https://raw.githubusercontent.com/gameap/plugin-fastdl/main/scripts/{script}"
+                )
+            );
+            assert_eq!(install.2, expected);
+            let status: NodeSetupStatus = serde_json::from_slice(&response.body).unwrap();
+            assert_eq!(status.task_id, install.0);
+            assert_eq!(status.download_task_id, download.0);
+            assert_eq!(status, store::get_status(&mut host, 1).unwrap());
+            assert_eq!(
+                store::get_config(&mut host, 1).unwrap().public_base_url,
+                "http://cdn.example"
+            );
+            assert!(
+                host.uploads
+                    .iter()
+                    .all(|(_, path, _)| !path.ends_with(script))
+            );
+            assert!(
+                host.uploads
+                    .iter()
+                    .any(|(_, path, _)| path.ends_with("config.json"))
+            );
+        }
+    }
+}
+
+#[test]
+fn setup_rejects_invalid_requests_and_unsupported_nodes_before_side_effects() {
+    for body in [
+        json!({"download_url": "https://example.com/file"}),
+        json!({"sha256": "a".repeat(64)}),
+        json!({"script_url": "https://example.com/install.sh"}),
+        json!(null),
+    ] {
+        let mut host = installed_host();
+        let response = router::dispatch(&mut host, &request(1, "POST", "/nodes/1/setup", body));
+        assert_eq!(response.status_code, 400);
+        assert!(host.uploads.is_empty());
+        assert!(host.created_tasks.is_empty());
+    }
+    let mut host = installed_host();
+    host.nodes.get_mut(&1).unwrap().os = "macos".into();
+    let response = router::dispatch(&mut host, &request(1, "POST", "/nodes/1/setup", json!({})));
+    assert_eq!(response.status_code, 400);
+    assert!(host.uploads.is_empty());
+    assert!(host.created_tasks.is_empty());
+}
+
+#[test]
+fn automatic_installation_waits_for_download_and_rejects_duplicate_setup() {
+    let mut host = installed_host();
+    let req = request(1, "POST", "/nodes/1/setup", json!({}));
+    assert_eq!(router::dispatch(&mut host, &req).status_code, 202);
+    assert_eq!(router::dispatch(&mut host, &req).status_code, 409);
+    assert_eq!(host.created_tasks.len(), 2);
+    let install_id = host.created_tasks[1].0;
+    host.task_states.get_mut(&install_id).unwrap().status = TaskStatus::Success;
+    assert_eq!(
+        node_setup::get_status(&mut host, 1).unwrap().status,
+        SetupStatus::Installing
+    );
+    assert!(host.commands.is_empty());
+}
+
+#[test]
+fn failed_installer_download_fails_setup_without_probing_the_binary() {
+    for failure in [TaskStatus::Error, TaskStatus::Canceled] {
+        let mut host = installed_host();
+        start_installation(&mut host);
+        let download_id = host.created_tasks[0].0;
+        host.task_states.get_mut(&download_id).unwrap().status = failure;
+        let status = node_setup::get_status(&mut host, 1).unwrap();
+        assert_eq!(status.status, SetupStatus::Failed);
+        assert!(
+            status
+                .error_message
+                .starts_with("Installer download failed")
+        );
+        assert_eq!(status.task_id, download_id);
+        assert!(host.commands.is_empty());
+    }
+}
+
+#[test]
+fn missing_installer_download_task_expires() {
+    let mut host = installed_host();
+    start_installation(&mut host);
+    let download_id = host.created_tasks[0].0;
+    host.task_states.remove(&download_id);
+    host.now += 1801;
+    let status = node_setup::get_status(&mut host, 1).unwrap();
+    assert_eq!(status.status, SetupStatus::Failed);
+    assert_eq!(status.error_message, "Installation timed out");
+}
+
+#[test]
+fn linux_and_windows_install_tasks_preserve_custom_verified_downloads() {
     for os in ["linux", "windows"] {
         let mut host = installed_host();
         host.nodes.get_mut(&1).unwrap().os = os.into();
@@ -493,7 +627,8 @@ fn linux_and_windows_install_tasks_embed_verified_installer_inputs() {
             "{}",
             String::from_utf8_lossy(&response.body)
         );
-        assert_eq!(host.created_tasks.len(), 1);
+        assert_eq!(host.created_tasks.len(), 2);
+        assert_eq!(host.created_tasks[1].3, Some(host.created_tasks[0].0));
 
         // Pinned in full: a substring check passes just as happily when the
         // caller and the installer disagree about the argument names.
@@ -502,44 +637,50 @@ fn linux_and_windows_install_tasks_embed_verified_installer_inputs() {
             format!(
                 concat!(
                     "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass ",
-                    r#"-File "C:\GameAP Data\.plugins\fastdla\install-windows.ps1" "#,
+                    r#"-File "{node_tools_path}/install-windows.ps1" "#,
                     "-DownloadUrl https://releases.example/gameap-fastdl ",
                     "-Sha256 {digest} ",
                     r#"-InstallDir "C:\GameAP Data\.plugins\fastdla" "#,
                     r#"-ConfigPath "C:\GameAP Data\.plugins\fastdla\config.json""#,
                 ),
                 digest = digest,
+                node_tools_path = "{node_tools_path}",
             )
         } else {
             format!(
                 concat!(
-                    "/bin/bash /srv/gameap/.plugins/fastdla/install-linux.sh ",
+                    "/bin/bash '{node_tools_path}/install-linux.sh' ",
                     "--download-url=https://releases.example/gameap-fastdl ",
                     "--sha256={digest} ",
                     "--install-dir=/srv/gameap/.plugins/fastdla ",
                     "--config=/srv/gameap/.plugins/fastdla/config.json",
                 ),
                 digest = digest,
+                node_tools_path = "{node_tools_path}",
             )
         };
-        assert_eq!(host.created_tasks[0].2, expected);
+        assert_eq!(host.created_tasks[1].2, expected);
 
         let installer_name = if os == "windows" {
             "install-windows.ps1"
         } else {
             "install-linux.sh"
         };
+        assert_eq!(
+            host.created_tasks[0].2,
+            format!(
+                "get-tool https://raw.githubusercontent.com/gameap/plugin-fastdl/main/scripts/{installer_name}"
+            )
+        );
         assert!(
-            host.uploads
+            !host
+                .uploads
                 .iter()
-                .any(|(_, path, mode)| path.ends_with(installer_name) && *mode == 0o700)
+                .any(|(_, path, _)| path.ends_with(installer_name))
         );
     }
 }
 
-// The installers are compiled into the plugin, so a renamed option is a
-// compile-time-visible break rather than something a node discovers at install
-// time.
 #[test]
 fn installers_accept_the_options_the_plugin_passes() {
     let linux = include_str!("../../scripts/install-linux.sh");
@@ -582,7 +723,9 @@ fn failed_setup_task_is_not_reported_as_installed() {
     });
     let response = router::dispatch(&mut host, &request(1, "POST", "/nodes/1/setup", body));
     assert_eq!(response.status_code, 202);
-    let task_id = host.created_tasks[0].0;
+    let download_id = host.created_tasks[0].0;
+    host.task_states.get_mut(&download_id).unwrap().status = TaskStatus::Success;
+    let task_id = host.created_tasks[1].0;
     host.task_states.get_mut(&task_id).unwrap().status = TaskStatus::Error;
     assert_eq!(
         node_setup::get_status(&mut host, 1).unwrap().status,

@@ -46,15 +46,16 @@ Handlers check permissions, parse requests and delegate to services. Services us
 
 ## Node installation
 
-1. Build the appropriate standalone `gameap-fastdl` executable from the sibling project. Publish it at a trusted HTTPS URL and obtain its SHA256 digest from the trusted build.
-2. Open **Administration → FastDL**, select a node, and save its listen address and public base URL.
-3. Supply the binary URL and SHA256 and select **Install**. The same action updates an existing installation.
-4. Wait for installation to complete. The plugin tracks a daemon task and verifies `gameap-fastdl version` after successful service installation.
-5. Open a GoldSource or Source server's **FastDL** tab, select its engine and game directory, and activate FastDL.
+1. Open **Administration → FastDL**, select a node, and save its listen address and public base URL.
+2. Select **Install** and confirm. Use **Update** for an existing installation. The installer and the latest stable binary for the node's OS and architecture are selected automatically.
+3. Wait for installation to complete. The plugin tracks the download and installation tasks and verifies `gameap-fastdl version` after successful service installation.
+4. Open a GoldSource or Source server's **FastDL** tab, select its engine and game directory, and activate FastDL.
 
-Installation uploads the bundled installer through GameAP Daemon. It downloads a binary over HTTPS, verifies SHA256 **before executing it**, validates configuration, registers or updates the service, and checks that it stays up: both installers poll to a deadline and then require the service to hold for several seconds, because a restart policy makes a crash loop look healthy between restarts. Linux requires root/systemd; Windows requires administrative SCM access. Scripts preserve the previous executable and service definition and roll back any change they made once something fails, reporting a failed update as failed even when rollback restores the previous running version.
+Installation uses the same daemon task chain as `plugin-files` and `plugin-respawn`: `get-tool` downloads the OS-specific installer from [this repository's scripts directory](https://github.com/gameap/plugin-fastdl/tree/main/scripts), then a dependent task runs it. The installer selects the latest stable [gameap-fastdl release](https://github.com/gameap/gameap-fastdl/releases), detects amd64 or arm64, and downloads the binary and its `.sha256` file from that same release over HTTPS. A published release with both assets is required; missing assets or an invalid checksum fail installation. See [scripts/README.md](scripts/README.md) for the release asset contract.
 
-Re-running **Install** with the SHA256 already installed skips the download and leaves a healthy service untouched, while still reconciling the service definition -- so it repairs a damaged service without an outage. The installers take named options and support `--help`/`-Help` and `--check`/`-Check`, which report the installed version and service state without changing anything. See [scripts/README.md](scripts/README.md) for the exact invocation and a local test recipe.
+The installer verifies SHA256 **before executing the binary**, validates configuration, registers or updates the service, and checks that it stays up: both installers poll to a deadline and then require the service to hold for several seconds, because a restart policy makes a crash loop look healthy between restarts. Linux requires root/systemd; Windows requires administrative SCM access. Scripts preserve the previous executable and service definition and roll back any change they made once something fails, reporting a failed update as failed even when rollback restores the previous running version.
+
+Re-running installation when the resolved SHA256 is already installed skips the binary download and leaves a healthy service untouched, while still reconciling the service definition -- so it repairs a damaged service without an outage. The installers take named options and support `--help`/`-Help` and `--check`/`-Check`, which report the installed version and service state without changing anything. See [scripts/README.md](scripts/README.md) for the exact invocation and a local test recipe.
 
 The Linux installer uses a system service with `ProtectSystem=strict`, no-new-privileges and a private cache as its only writable service directory, restarted by systemd after a crash. The Windows service runs as LocalSystem with equivalent SCM recovery actions. The private plugin directory must remain owned by a trusted daemon/service account and inaccessible to game-server accounts; Linux installation makes it root-owned with mode `0700`, and Windows applies a protected ACL to the plugin directory -- granting only SYSTEM, Administrators and the installing daemon identity -- which its contents inherit. Nodes installed by an earlier release carry those rules per file instead, which blocks inheritance; `-FixAcl` restores it once. The daemon identity must itself be trusted. Parent work directories must not be writable or replaceable by hosted game accounts. Installation refuses a path containing a symbolic link, reparse point, quote, `%` or control character, since both paths are written into a service definition.
 
@@ -84,9 +85,10 @@ Service files live below the daemon work path:
   config.json
   servers.d/server-<private-id>.json
   cache/
-  install-linux.sh | install-windows.ps1   uploaded installer
-  install.<random>/                        staging, only while installing
+  install.<random>/   staging, only while installing
 ```
+
+Installer scripts are downloaded into the daemon tools directory, resolved through `{node_tools_path}`.
 
 The numeric filename is private administrative state; HTTP uses only the independent token. The main JSON configuration is `{ "version": 1, "listen": "0.0.0.0:8080", "servers_dir": "servers.d", "cache_dir": "cache" }`. Each drop-in contains `token`, derived absolute `root`, `engine`, `enabled`, `autoindex`, and `generate_bz2`. The plugin does not offer custom extension allowlists; the Go service enforces its content policy.
 
@@ -105,6 +107,6 @@ All routes are relative to `/api/plugins/fastdla` and require an authenticated s
 | GET    | `/servers/{serverId}/fastdl` | View or manage | Server settings and download URL |
 | PUT    | `/servers/{serverId}/fastdl` | Manage         | Apply server settings            |
 
-Node settings are `{ "listen": "0.0.0.0:8080", "public_base_url": "http://cdn.example" }`. Setup accepts `{ "download_url": "https://releases.example/gameap-fastdl", "sha256": "<64 hexadecimal digits>" }`. A server update accepts `enabled`, `autoindex`, `engine` (`goldsource` or `source`), `game_dir`, `manage_game_config`, and `generate_bz2`. Unknown fields are rejected.
+Node settings are `{ "listen": "0.0.0.0:8080", "public_base_url": "http://cdn.example" }`. Setup accepts an empty body or `{}` for automatic installation. Existing integrations and custom builds can still pass `{ "download_url": "https://releases.example/gameap-fastdl", "sha256": "<64 hexadecimal digits>" }`; both fields must be supplied together. Setup status includes the download task reference alongside the installation task reference. If the download fails, the output link points to that failed task. A server update accepts `enabled`, `autoindex`, `engine` (`goldsource` or `source`), `game_dir`, `manage_game_config`, and `generate_bz2`. Unknown fields are rejected.
 
 Native Rust tests cover authorization boundaries, traversal and internal-path rejection, scoped helper invocation and failure handling, opaque public responses, install input checks, deletion after storage cleanup, stable private registration filenames, and the exact installer command for each platform together with the options the scripts accept. The frontend has validation/i18n unit tests and a browser smoke check with mocked API responses. `make lint` runs shellcheck over the Linux installer. [scripts/README.md](scripts/README.md) describes running it end to end against a local HTTPS source in a systemd container, including the rollback and re-run cases. Actual Windows service installation must be verified in a provisioned GameAP environment; local checks do not replace that deployment test.
