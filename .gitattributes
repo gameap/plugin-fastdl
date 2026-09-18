@@ -1,0 +1,5 @@
+# The installers are uploaded to nodes verbatim and run by bash and PowerShell.
+# A CRLF checkout breaks the shell script outright; PowerShell accepts LF, so
+# both are pinned to LF and stay byte-identical wherever they are checked out.
+*.sh text eol=lf
+*.ps1 text eol=lf

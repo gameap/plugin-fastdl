@@ -1,0 +1,28 @@
+[package]
+name = "fastdl"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "GameAP FastDL management for GoldSource and Source servers"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+gameap-plugin-sdk = { path = "../gameap-proto/rust/gameap-plugin-sdk" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[workspace]
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
