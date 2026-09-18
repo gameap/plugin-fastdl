@@ -36,7 +36,7 @@ async function install() {
     window.$message?.success(trans('install_started'));
     emit('started', status);
   } catch (e) {
-    error.value = errorMessage(e, trans('install_failed'));
+    error.value = errorMessage(e, trans('install_failed'), trans);
   } finally {
     saving.value = false;
   }

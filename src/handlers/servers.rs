@@ -29,3 +29,21 @@ pub fn update<H: HostApi>(host: &mut H, parts: &RequestParts) -> ApiResult {
     let response = servers::view(host, &server, access.can_manage)?;
     Ok(json_response(200, &response))
 }
+
+pub fn configure<H: HostApi>(host: &mut H, parts: &RequestParts) -> ApiResult {
+    let server_id = parse_u64_param(&parts.params, "serverId")?;
+    let access = auth::authorize_server(host, parts, server_id)?;
+    if !access.can_manage {
+        return Err(auth::forbidden());
+    }
+
+    let server = servers::get_server(host, server_id)?;
+    let configuration = servers::configure_server(host, &server)?;
+    Ok(json_response(
+        200,
+        &serde_json::json!({
+            "configured": true,
+            "configuration": configuration,
+        }),
+    ))
+}

@@ -35,7 +35,8 @@ pub(super) fn apply_node<H: HostApi>(host: &mut H, node_id: u64) -> Result<(), A
 
     for server in servers {
         if let Some(state) = store::get_server_state(host, server.id)? {
-            servers::update_server(host, &server, state.settings)?;
+            servers::update_server(host, &server, state.settings)
+                .map_err(|error| error.with_server_name(&server.name))?;
         }
     }
 

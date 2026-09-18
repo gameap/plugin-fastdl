@@ -18,6 +18,7 @@ pub enum RouteId {
     NodeSync,
     ServerFastdlGet,
     ServerFastdlUpdate,
+    ServerFastdlConfigure,
 }
 
 pub struct RouteDef {
@@ -84,6 +85,13 @@ pub const ROUTES: &[RouteDef] = &[
         pattern: "/servers/{serverId}/fastdl",
         admin_only: false,
         description: "Update game server FastDL settings",
+    },
+    RouteDef {
+        id: RouteId::ServerFastdlConfigure,
+        method: "POST",
+        pattern: "/servers/{serverId}/fastdl/configure",
+        admin_only: false,
+        description: "Apply saved FastDL game configuration",
     },
 ];
 
@@ -176,6 +184,11 @@ mod tests {
             ("POST", "/nodes/1/sync", RouteId::NodeSync),
             ("GET", "/servers/3/fastdl", RouteId::ServerFastdlGet),
             ("PUT", "/servers/3/fastdl", RouteId::ServerFastdlUpdate),
+            (
+                "POST",
+                "/servers/3/fastdl/configure",
+                RouteId::ServerFastdlConfigure,
+            ),
         ];
 
         for (method, path, expected) in cases {
@@ -209,7 +222,7 @@ mod tests {
     #[test]
     fn registers_authentication_and_admin_scope() {
         let routes = http_routes();
-        assert_eq!(routes.len(), 8);
+        assert_eq!(routes.len(), 9);
         for route in routes {
             assert!(route.requires_auth, "{}", route.path);
             assert_eq!(

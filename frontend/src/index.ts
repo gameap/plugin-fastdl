@@ -4,7 +4,7 @@ import FastDLTab from './tabs/FastDLTab.vue';
 import { translations } from './translations';
 
 export const fastdlPlugin: PluginDefinition = {
-  id: 'fastdla',
+  id: 'i3z7ix336msd4',
   name: 'FastDL',
   version: __PLUGIN_VERSION__,
   apiVersion: '1.0',
@@ -32,7 +32,7 @@ export const fastdlPlugin: PluginDefinition = {
       label: '@:fastdl',
       icon: 'download',
       name: 'fastdl',
-      checkPermission: { type: 'hasServerPermissions', permissions: ['plugin:fastdla:fastdl-view'] },
+      checkPermission: { type: 'hasServerPermissions', permissions: ['plugin:i3z7ix336msd4:fastdl-view'] },
       checkGame: { engines: ['GoldSource', 'Source'] },
     }],
   },

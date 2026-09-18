@@ -16,6 +16,7 @@ pub struct ApiError {
     pub status: i32,
     pub code: &'static str,
     pub message: String,
+    pub server_name: Option<String>,
 }
 
 impl ApiError {
@@ -24,6 +25,7 @@ impl ApiError {
             status,
             code,
             message: message.into(),
+            server_name: None,
         }
     }
 
@@ -47,11 +49,22 @@ impl ApiError {
         Self::new(500, "INTERNAL_ERROR", message)
     }
 
+    pub fn with_server_name(mut self, server_name: &str) -> Self {
+        self.message = format!(
+            "Could not apply FastDL settings for game server {server_name:?}. {}",
+            self.message,
+        );
+        self.server_name = Some(server_name.to_owned());
+        self
+    }
+
     pub fn into_response(self) -> pb::HttpResponse {
         #[derive(Serialize)]
         struct ErrorBody {
             code: &'static str,
             message: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            server_name: Option<String>,
         }
 
         json_response(
@@ -59,6 +72,7 @@ impl ApiError {
             &ErrorBody {
                 code: self.code,
                 message: self.message,
+                server_name: self.server_name,
             },
         )
     }

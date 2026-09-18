@@ -6,14 +6,23 @@ use crate::http::ApiError;
 
 use super::validate_relative;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Engine {
     Goldsource,
+    #[default]
     Source,
 }
 
 impl Engine {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "goldsource" => Some(Self::Goldsource),
+            "source" => Some(Self::Source),
+            _ => None,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Goldsource => "goldsource",
@@ -27,6 +36,7 @@ impl Engine {
 pub struct ServerInput {
     pub enabled: bool,
     pub autoindex: bool,
+    #[serde(default)]
     pub engine: Engine,
     pub game_dir: String,
     #[serde(default = "default_true")]
@@ -52,34 +62,30 @@ impl ServerInput {
         Ok(())
     }
 
-    pub fn for_game(game: &str) -> (Self, bool) {
-        let (engine, game_dir, supported) = match game.to_ascii_lowercase().as_str() {
-            "cstrike" | "cs16" | "cs" => (Engine::Goldsource, "cstrike", true),
-            "valve" | "hldm" | "hl" => (Engine::Goldsource, "valve", true),
-            "czero" => (Engine::Goldsource, "czero", true),
-            "dod" => (Engine::Goldsource, "dod", true),
-            "tfc" => (Engine::Goldsource, "tfc", true),
-            "css" | "cstrike_source" | "cs-source" => (Engine::Source, "cstrike", true),
-            "csgo" => (Engine::Source, "csgo", true),
-            "tf2" | "tf" => (Engine::Source, "tf", true),
-            "gmod" | "garrysmod" => (Engine::Source, "garrysmod", true),
-            "hl2dm" | "hl2mp" => (Engine::Source, "hl2mp", true),
-            "l4d" | "left4dead" => (Engine::Source, "left4dead", true),
-            "l4d2" | "left4dead2" => (Engine::Source, "left4dead2", true),
-            "dods" | "dod_source" => (Engine::Source, "dod", true),
-            _ => (Engine::Source, "", false),
+    pub fn for_game(game: &str, engine: Engine) -> Self {
+        let game_dir = match game.to_ascii_lowercase().as_str() {
+            "cstrike" | "cs16" | "cs" | "css" | "cstrike_source" | "cs-source" => "cstrike",
+            "valve" | "hldm" | "hl" => "valve",
+            "czero" => "czero",
+            "dod" | "dods" | "dod_source" => "dod",
+            "tfc" => "tfc",
+            "csgo" => "csgo",
+            "tf2" | "tf" => "tf",
+            "gmod" | "garrysmod" => "garrysmod",
+            "hl2dm" | "hl2mp" => "hl2mp",
+            "l4d" | "left4dead" => "left4dead",
+            "l4d2" | "left4dead2" => "left4dead2",
+            _ => "",
         };
 
-        let settings = Self {
+        Self {
             enabled: false,
             autoindex: false,
             engine,
             game_dir: game_dir.into(),
             manage_game_config: true,
             generate_bz2: true,
-        };
-
-        (settings, supported)
+        }
     }
 }
 
@@ -176,7 +182,7 @@ mod tests {
 
     #[test]
     fn public_response_keeps_settings_at_the_top_level() {
-        let (settings, _) = ServerInput::for_game("css");
+        let settings = ServerInput::for_game("css", Engine::Source);
         let response = ServerResponse {
             server_name: "Counter-Strike: Source".into(),
             settings,
@@ -205,7 +211,7 @@ mod tests {
         for game_dir in ["cfg", "cstrike/Addons", "Plugins", "cstrike/Backups"] {
             let settings = ServerInput {
                 game_dir: game_dir.into(),
-                ..ServerInput::for_game("css").0
+                ..ServerInput::for_game("css", Engine::Source)
             };
 
             assert!(settings.validate().is_err(), "{game_dir}");
@@ -213,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn game_defaults_preserve_engine_and_directory_mappings() {
+    fn game_defaults_preserve_directories_and_use_the_provided_engine() {
         for (game, expected_engine, expected_directory) in [
             ("CS16", Engine::Goldsource, "cstrike"),
             ("hl", Engine::Goldsource, "valve"),
@@ -221,17 +227,25 @@ mod tests {
             ("tf2", Engine::Source, "tf"),
             ("l4d2", Engine::Source, "left4dead2"),
         ] {
-            let (settings, supported) = ServerInput::for_game(game);
+            let settings = ServerInput::for_game(game, expected_engine);
 
-            assert!(supported, "{game}");
             assert_eq!(settings.engine, expected_engine, "{game}");
             assert_eq!(settings.game_dir, expected_directory, "{game}");
         }
 
-        let (settings, supported) = ServerInput::for_game("unknown");
+        let settings = ServerInput::for_game("unknown", Engine::Goldsource);
 
-        assert!(!supported);
+        assert_eq!(settings.engine, Engine::Goldsource);
         assert!(!settings.enabled);
         assert!(settings.game_dir.is_empty());
+    }
+
+    #[test]
+    fn game_engines_accept_the_panel_names_case_insensitively() {
+        assert_eq!(Engine::parse("GoldSource"), Some(Engine::Goldsource));
+        assert_eq!(Engine::parse("Source"), Some(Engine::Source));
+        assert_eq!(Engine::parse(" source "), Some(Engine::Source));
+        assert_eq!(Engine::parse("Source2"), None);
+        assert_eq!(Engine::parse(""), None);
     }
 }

@@ -12,7 +12,7 @@ manages. One per supported node platform:
 
 Both scripts are bundled into `fastdl.wasm` at build time. The plugin selects the
 script for the node's OS, uploads it through the node file API with mode `0700`
-into `.plugins/fastdla`, and creates one daemon task to run it. The script, binary
+into `.plugins/i3z7ix336msd4`, and creates one daemon task to run it. The script, binary
 and configuration live in this private directory below the daemon work path.
 
 Each installation replaces the private script with the version bundled in the
@@ -22,15 +22,15 @@ longer used, so a stale copy in the tools directory cannot affect installation.
 Linux task:
 
 ```text
-/bin/bash '{node_work_path}/.plugins/fastdla/install-linux.sh' \
-    '--install-dir={node_work_path}/.plugins/fastdla' \
-    '--config={node_work_path}/.plugins/fastdla/config.json'
+/bin/bash '{node_work_path}/.plugins/i3z7ix336msd4/install-linux.sh' \
+    '--install-dir={node_work_path}/.plugins/i3z7ix336msd4' \
+    '--config={node_work_path}/.plugins/i3z7ix336msd4/config.json'
 ```
 
 Windows task (the command is one line):
 
 ```text
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{node_work_path}\.plugins\fastdla\install-windows.ps1" -InstallDir "{node_work_path}\.plugins\fastdla" -ConfigPath "{node_work_path}\.plugins\fastdla\config.json"
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{node_work_path}\.plugins\i3z7ix336msd4\install-windows.ps1" -InstallDir "{node_work_path}\.plugins\i3z7ix336msd4" -ConfigPath "{node_work_path}\.plugins\i3z7ix336msd4\config.json"
 ```
 
 The examples use `{node_work_path}` to stand for the node's configured work
@@ -119,8 +119,8 @@ Both scripts report an installation without changing it, and exit 1 when it is
 unhealthy. The paths are read from the installed service when they are omitted:
 
 ```
-/bin/bash /srv/gameap/.plugins/fastdla/install-linux.sh --check
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\gameap\.plugins\fastdla\install-windows.ps1" -Check
+/bin/bash /srv/gameap/.plugins/i3z7ix336msd4/install-linux.sh --check
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\gameap\.plugins\i3z7ix336msd4\install-windows.ps1" -Check
 ```
 
 ## Testing locally

@@ -1,6 +1,6 @@
 //! Game server settings and the transition between published configurations.
 
-use crate::domain::{NodeConfig, ServerInput, ServerResponse, ServerState, SetupStatus};
+use crate::domain::{Engine, NodeConfig, ServerInput, ServerResponse, ServerState, SetupStatus};
 use crate::host_api::{HostApi, ServerInfo};
 use crate::http::ApiError;
 
@@ -17,17 +17,23 @@ pub fn view<H: HostApi>(
     can_manage: bool,
 ) -> Result<ServerResponse, ApiError> {
     let stored = store::get_server_state(host, server.id)?;
-    let (defaults, supported) = ServerInput::for_game(&server.game_id);
-    let settings = stored
+    let engine = game_engine(host, server)?;
+    let defaults = ServerInput::for_game(&server.game_id, engine.unwrap_or_default());
+    let mut settings = stored
         .as_ref()
         .map(|state| state.settings.clone())
         .unwrap_or(defaults);
+    if let Some(engine) = engine {
+        settings.engine = engine;
+    }
     let config = store::get_config(host, server.node_id)?;
     let token = stored.as_ref().map_or("", |state| state.token.as_str());
     let download_url = paths::download_url(&config, token);
     let status = store::get_status(host, server.node_id)?;
     let node_ready = status.status == SetupStatus::Installed;
-    let synced = stored.as_ref().is_none_or(|state| state.synced);
+    let synced = stored
+        .as_ref()
+        .is_none_or(|state| state.synced && engine == Some(state.settings.engine));
     let mut warnings = Vec::new();
 
     if !node_ready {
@@ -46,10 +52,7 @@ pub fn view<H: HostApi>(
     let configuration = if download_url.is_empty() || !settings.enabled {
         Vec::new()
     } else {
-        vec![
-            format!("sv_downloadurl \"{download_url}\""),
-            "sv_allowdownload \"1\"".into(),
-        ]
+        game_config::commands(settings.engine, &download_url)
     };
 
     Ok(ServerResponse {
@@ -59,22 +62,70 @@ pub fn view<H: HostApi>(
         configuration,
         can_manage,
         synced,
-        supported: supported || stored.is_some(),
+        supported: engine.is_some(),
         node_ready,
         warnings,
     })
 }
 
+pub fn configure_server<H: HostApi>(
+    host: &mut H,
+    server: &ServerInfo,
+) -> Result<Vec<String>, ApiError> {
+    let engine = game_engine(host, server)?
+        .ok_or_else(|| ApiError::bad_request("FastDL only supports GoldSource and Source games"))?;
+    let state = store::get_server_state(host, server.id)?.ok_or_else(configuration_not_ready)?;
+    if !state.settings.enabled
+        || !state.synced
+        || !server.enabled
+        || state.node_id != server.node_id
+        || state.server_dir != server.dir.replace('\\', "/")
+        || state.settings.engine != engine
+    {
+        return Err(configuration_not_ready());
+    }
+
+    state.settings.validate()?;
+    paths::server_definition(server.id, &state.token)?;
+    let config = store::get_config(host, server.node_id)?;
+    ensure_node_ready(host, server.node_id, &config)?;
+    let download_url = paths::download_url(&config, &state.token);
+    crate::domain::validate_url(&download_url, false)?;
+    game_config::apply(host, &state, Some(&download_url))?;
+
+    Ok(game_config::commands(engine, &download_url))
+}
+
+fn configuration_not_ready() -> ApiError {
+    ApiError::new(
+        409,
+        "CONFIGURATION_NOT_READY",
+        "Enable FastDL and save its settings successfully before applying the game configuration",
+    )
+}
+
 pub fn update_server<H: HostApi>(
     host: &mut H,
     server: &ServerInfo,
-    input: ServerInput,
+    mut input: ServerInput,
 ) -> Result<(), ApiError> {
     input.validate()?;
+    let previous = store::get_server_state(host, server.id)?;
+    let Some(engine) = game_engine(host, server)? else {
+        if let Some(mut previous) = previous {
+            previous.synced = false;
+            store::save_server_state(host, server.id, &previous)?;
+            let node = node_setup::get_node(host, previous.node_id)?;
+            sync::publish_server(host, &node, &previous, false)?;
+        }
+        return Err(ApiError::bad_request(
+            "FastDL only supports GoldSource and Source games",
+        ));
+    };
+    input.engine = engine;
 
     let node = node_setup::get_node(host, server.node_id)?;
     let config = store::get_config(host, server.node_id)?;
-    let previous = store::get_server_state(host, server.id)?;
 
     if input.enabled {
         ensure_node_ready(host, server.node_id, &config)?;
@@ -113,6 +164,13 @@ pub fn update_server<H: HostApi>(
 
     next.synced = true;
     store::save_server_state(host, server.id, &next)
+}
+
+fn game_engine<H: HostApi>(host: &mut H, server: &ServerInfo) -> Result<Option<Engine>, ApiError> {
+    Ok(host
+        .get_game_engine(&server.game_id)?
+        .as_deref()
+        .and_then(Engine::parse))
 }
 
 fn ensure_node_ready<H: HostApi>(

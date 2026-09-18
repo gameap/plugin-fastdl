@@ -15,7 +15,7 @@ use gameap_plugin_sdk::{Plugin, PluginError, register_plugin};
 
 use crate::host_api::HostApi;
 
-pub const PLUGIN_ID: &str = "fastdla";
+pub const PLUGIN_ID: &str = "i3z7ix336msd4";
 pub const REQUIRED_PERMISSIONS: &[&str] =
     &["files", "listen_events", "manage_servers", "node_commands"];
 
@@ -107,7 +107,7 @@ impl<H: HostApi> Plugin for FastdlPlugin<H> {
                 .iter()
                 .map(|name| pb::ServerAbility {
                     name: (*name).into(),
-                    title: format!("plugins.fastdla.abilities.{name}"),
+                    title: format!("plugins.i3z7ix336msd4.abilities.{name}"),
                 })
                 .collect(),
         })

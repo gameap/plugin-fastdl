@@ -1,8 +1,7 @@
 <template>
-  <div v-if="isAdmin" class="fastdl-admin space-y-4">
+  <div v-if="isAdmin" class="fastdl-admin">
     <GBreadcrumbs :items="breadcrumbs" />
-    <p class="text-stone-500">{{ trans('introduction') }}</p>
-    <div class="flex flex-wrap items-center gap-3">
+    <div class="fastdl-toolbar">
       <GButton type="button" color="white" :loading="loading" @click="load"><GIcon name="refresh" class="mr-1" />{{ trans('refresh') }}</GButton>
       <NInput v-model:value="search" clearable :placeholder="trans('search_nodes')" :input-props="{ 'aria-label': trans('search_nodes') }" style="width: min(100%, 360px)" />
     </div>
@@ -13,28 +12,38 @@
     <div v-else class="fastdl-nodes">
       <NCard v-for="node in filteredNodes" :key="node.id" size="small">
         <template #header>
-          <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <div class="fastdl-node-header">
             <GIcon name="server" class="flex-none" />
             <span class="fastdl-name">{{ node.name }}</span>
             <GStatusBadge :color="statusColor(node.status)" :text="trans(`status_${node.status}`)" />
           </div>
         </template>
-        <div class="space-y-3">
-          <p class="text-sm text-stone-500">{{ node.os }}<span v-if="node.version"> · {{ node.version }}</span></p>
+        <div class="fastdl-node-content">
+          <p class="fastdl-node-os text-sm text-stone-500">
+            <GIcon :name="osIcon(node.os)" aria-hidden="true" />
+            <span>{{ node.os }}<span v-if="node.version"> · {{ node.version }}</span></span>
+          </p>
           <p class="text-sm">{{ trans('enabled_servers').replace('{count}', String(node.enabled_servers)) }}</p>
-          <p v-if="node.config.public_base_url" class="fastdl-url text-sm">{{ node.config.public_base_url }}</p>
-          <NAlert v-if="node.error_message" type="error">{{ node.error_message }}</NAlert>
-          <NAlert v-if="!node.config.public_base_url && node.status !== 'installing'" type="info">{{ trans('configure_first') }}</NAlert>
-          <div class="flex flex-wrap gap-2">
-            <GButton type="button" color="black" size="small" :disabled="loading || node.status === 'installing' || operatingId === node.id" @click="settingsNode = node"><GIcon name="settings" class="mr-1" />{{ trans('settings') }}</GButton>
-            <GButton type="button" color="black" size="small" :disabled="loading || node.status === 'installing' || operatingId === node.id || !node.config.public_base_url" @click="installNode = node"><GIcon name="download" class="mr-1" />{{ trans(node.status === 'installed' ? 'update' : 'install') }}</GButton>
-            <GButton type="button" v-if="node.status === 'installed'" color="black" size="small" :title="trans('sync_hint')" :loading="operatingId === node.id" :disabled="loading || operatingId !== null && operatingId !== node.id" @click="sync(node)">{{ trans('sync') }}</GButton>
-          </div>
-          <router-link v-if="node.task_id" :to="{ name: 'admin.gdaemon_tasks.output', params: { id: node.task_id } }" class="inline-block text-sm underline">{{ trans('task_output') }}</router-link>
+          <NAlert v-if="node.error_message" type="error">
+            <div class="fastdl-install-error">
+              <p>{{ node.error_message }}</p>
+              <RouterLink
+                v-if="node.status === 'failed' && (node.task_id ?? 0) > 0"
+                :to="{ name: 'admin.gdaemon_tasks.output', params: { id: node.task_id } }"
+                class="text-info underline hover:no-underline"
+              >{{ trans('open_daemon_task') }}</RouterLink>
+            </div>
+          </NAlert>
         </div>
+        <template #footer>
+          <div class="fastdl-node-actions">
+            <GButton v-if="node.status === 'installed'" type="button" color="black" size="small" :disabled="loading" @click="openSettings(node)"><GIcon name="settings" class="mr-1" />{{ trans('settings') }}</GButton>
+            <GButton type="button" color="black" size="small" :disabled="loading || node.status === 'installing'" @click="openInstall(node)"><GIcon name="download" class="mr-1" />{{ trans(node.status === 'installed' ? 'update' : 'install') }}</GButton>
+          </div>
+        </template>
       </NCard>
     </div>
-    <NodeSettings v-if="settingsNode" :key="settingsNode.id" :node="settingsNode" @close="settingsNode = null" @saved="onSettingsSaved" />
+    <NodeSettings v-if="settingsNode" :key="settingsNode.id" :node="settingsNode" :mode="settingsMode" @close="onSettingsClosed" @saved="onSettingsClosed" @started="onInstallStarted" />
     <NodeInstall v-if="installNode" :key="installNode.id" :node="installNode" @close="installNode = null" @started="onInstallStarted" />
   </div>
 </template>
@@ -42,9 +51,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { NAlert, NCard, NInput, NSpin } from 'naive-ui';
-import { useRouter } from 'vue-router';
+import { RouterLink, useRouter } from 'vue-router';
 import { useIsAdmin, usePluginTrans } from '@gameap/plugin-sdk';
-import { errorMessage, fastdlApi, type FastDLNode, type InstallState, type NodeStatus } from '../api';
+import { errorMessage, fastdlApi, type FastDLNode, type InstallState, type NodeConfig, type NodeStatus } from '../api';
 import NodeSettings from '../components/NodeSettings.vue';
 import NodeInstall from '../components/NodeInstall.vue';
 
@@ -58,12 +67,19 @@ const loading = ref(false);
 const error = ref('');
 const pollError = ref(false);
 const settingsNode = ref<FastDLNode | null>(null);
+const settingsMode = ref<'settings' | 'install'>('settings');
 const installNode = ref<FastDLNode | null>(null);
-const operatingId = ref<number | null>(null);
 const filteredNodes = computed(() => nodes.value.filter((node) => node.name.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())));
 let timer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 let generation = 0;
+
+function osIcon(os: string): string {
+  const name = String(os || '').trim().toLowerCase();
+  if (name.startsWith('w')) return 'windows';
+  if (name.startsWith('m')) return 'apple';
+  return 'linux';
+}
 
 function statusColor(status: InstallState): string {
   return { installed: 'green', installing: 'blue', failed: 'red', not_installed: 'stone' }[status];
@@ -102,7 +118,7 @@ async function load() {
     schedulePoll();
   } catch (e) {
     if (!disposed && request === generation) {
-      error.value = errorMessage(e, trans('load_failed'));
+      error.value = errorMessage(e, trans('load_failed'), trans);
       schedulePoll();
     }
   } finally {
@@ -110,31 +126,36 @@ async function load() {
   }
 }
 
-function onSettingsSaved() {
+function openSettings(node: FastDLNode) {
+  settingsMode.value = 'settings';
+  settingsNode.value = node;
+}
+
+function openInstall(node: FastDLNode) {
+  if (node.status === 'installed') {
+    installNode.value = node;
+  } else {
+    settingsMode.value = 'install';
+    settingsNode.value = node;
+  }
+}
+
+function onSettingsClosed() {
   settingsNode.value = null;
   void load();
 }
 
-function onInstallStarted(status: NodeStatus) {
+function onInstallStarted(status: NodeStatus, config?: NodeConfig) {
   generation++;
-  const node = nodes.value.find((item) => item.id === installNode.value?.id);
-  if (node) Object.assign(node, status);
-  installNode.value = null;
-  schedulePoll();
-}
-
-async function sync(node: FastDLNode) {
-  if (operatingId.value !== null) return;
-  operatingId.value = node.id;
-  error.value = '';
-  try {
-    await fastdlApi.sync(node.id);
-    if (!disposed) window.$message?.success(trans('synced'));
-  } catch (e) {
-    if (!disposed) error.value = errorMessage(e, trans('sync_failed'));
-  } finally {
-    operatingId.value = null;
+  const nodeId = installNode.value?.id ?? settingsNode.value?.id;
+  const node = nodes.value.find((item) => item.id === nodeId);
+  if (node) {
+    Object.assign(node, status);
+    if (config) node.config = config;
   }
+  installNode.value = null;
+  settingsNode.value = null;
+  schedulePoll();
 }
 
 onMounted(() => {
@@ -148,7 +169,17 @@ onBeforeUnmount(() => { disposed = true; generation++; clearTimeout(timer); });
 </script>
 
 <style scoped>
+.fastdl-admin,
+.fastdl-node-content { display: flex; flex-direction: column; min-width: 0; }
+.fastdl-admin { gap: 1rem; }
+.fastdl-node-content { gap: .75rem; }
+.fastdl-install-error { display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; }
+.fastdl-node-content p { margin: 0; }
+.fastdl-node-os { display: flex; align-items: center; gap: .375rem; }
+.fastdl-toolbar,
+.fastdl-node-header,
+.fastdl-node-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-width: 0; }
+.fastdl-toolbar { gap: .75rem; }
 .fastdl-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 1rem; }
 .fastdl-name { overflow-wrap: anywhere; }
-.fastdl-url { overflow-wrap: anywhere; }
 </style>

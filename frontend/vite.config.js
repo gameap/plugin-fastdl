@@ -76,6 +76,11 @@ function wrapInIIFEPlugin() {
 
 export default defineConfig({
     plugins: [vue()],
+    test: {
+        testTransformMode: {
+            web: ['**/FastDLTab.test.ts', '**/NodeSettings.test.ts', '**/AdminPage.test.ts'],
+        },
+    },
     build: {
         lib: {
             entry: resolve(process.cwd(), 'src/index.ts'),

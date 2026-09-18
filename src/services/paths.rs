@@ -4,8 +4,8 @@ use crate::domain::{Engine, NodeConfig, NodeOs, ServerState, validate_relative};
 use crate::host_api::NodeInfo;
 use crate::http::ApiError;
 
-pub const PLUGIN_DIR: &str = ".plugins/fastdla";
-pub const CONFIG_PATH: &str = ".plugins/fastdla/config.json";
+pub const PLUGIN_DIR: &str = ".plugins/i3z7ix336msd4";
+pub const CONFIG_PATH: &str = ".plugins/i3z7ix336msd4/config.json";
 
 pub fn server_definition(server_id: u64, token: &str) -> Result<String, ApiError> {
     let valid_token = token.len() == 32

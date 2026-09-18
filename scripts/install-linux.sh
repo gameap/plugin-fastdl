@@ -20,9 +20,9 @@
 # same executable and the same unit leaves the running service alone.
 #
 # Invoked by the panel's FastDL plugin as a daemon task:
-#   /bin/bash {node_work_path}/.plugins/fastdla/install-linux.sh \
-#       --install-dir={node_work_path}/.plugins/fastdla \
-#       --config={node_work_path}/.plugins/fastdla/config.json
+#   /bin/bash {node_work_path}/.plugins/i3z7ix336msd4/install-linux.sh \
+#       --install-dir={node_work_path}/.plugins/i3z7ix336msd4 \
+#       --config={node_work_path}/.plugins/i3z7ix336msd4/config.json
 
 set -e
 umask 077

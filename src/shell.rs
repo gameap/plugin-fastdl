@@ -97,8 +97,11 @@ mod tests {
             "get-tool https://example.com/install.sh"
         );
         assert_eq!(
-            shell_join(&["serve", "--config=/srv/gameap/.plugins/fastdla/config.json"]),
-            "serve --config=/srv/gameap/.plugins/fastdla/config.json"
+            shell_join(&[
+                "serve",
+                "--config=/srv/gameap/.plugins/i3z7ix336msd4/config.json"
+            ]),
+            "serve --config=/srv/gameap/.plugins/i3z7ix336msd4/config.json"
         );
     }
 
@@ -123,8 +126,11 @@ mod tests {
     #[test]
     fn windows_bare_backslash_path_passes_through() {
         assert_eq!(
-            shell_join_windows(&[r"C:\gameap\.plugins\fastdla\gameap-fastdl.exe", "version"]),
-            r"C:\gameap\.plugins\fastdla\gameap-fastdl.exe version"
+            shell_join_windows(&[
+                r"C:\gameap\.plugins\i3z7ix336msd4\gameap-fastdl.exe",
+                "version"
+            ]),
+            r"C:\gameap\.plugins\i3z7ix336msd4\gameap-fastdl.exe version"
         );
     }
 
