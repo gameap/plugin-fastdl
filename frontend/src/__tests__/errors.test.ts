@@ -42,13 +42,12 @@ describe('FastDL API errors', () => {
     expect(errorMessage(responseError(code, message), 'fallback', (value) => value)).toBe(key);
   });
 
-  it.each(['en', 'ru'] as const)('distinguishes node settings saved from node synchronization in %s', (locale) => {
+  it.each(['en', 'ru'] as const)('explains when node settings were saved but could not be applied in %s', (locale) => {
     const text = translations[locale];
     const trans = (key: string) => text[key as keyof typeof text];
     for (const [code, suffix] of [['CONFIGURE_FAILED', 'configure_failed'], ['GAME_CONFIG_UPDATE_FAILED', 'game_config_update_failed']] as const) {
       const error = responseError(code);
       expect(errorMessage(error, text.save_failed, trans, 'node-save')).toBe(text[`node_save_${suffix}`]);
-      expect(errorMessage(error, text.sync_failed, trans, 'node-sync')).toBe(text[`node_sync_${suffix}`]);
       expect(errorMessage(error, text.save_failed, trans)).toBe(text[suffix]);
     }
   });
@@ -57,7 +56,6 @@ describe('FastDL API errors', () => {
     const trans = (key: string) => translations.ru[key as keyof typeof translations.ru];
     const error = { response: { data: { code: 'CONFIGURE_FAILED', server_name: 'Half-Life', server_id: 4, message: 'secret command' } } };
     expect(errorMessage(error, 'fallback', trans, 'node-save')).toBe(`Игровой сервер: «Half-Life». ${translations.ru.node_save_configure_failed}`);
-    expect(errorMessage(error, 'fallback', trans, 'node-sync')).toBe(`Игровой сервер: «Half-Life». ${translations.ru.node_sync_configure_failed}`);
   });
 
   it.each([undefined, null, {}, '', ' ', '<html>secret</html>', '{"enabled":true}', 'server\nprivate output', 'x'.repeat(201)])('ignores a malformed game server name: %j', (name) => {
@@ -68,5 +66,13 @@ describe('FastDL API errors', () => {
   it('does not claim node settings were saved for validation or an unknown error', () => {
     expect(errorMessage(responseError('INVALID_INPUT', 'Invalid public or download URL'), 'fallback', (key) => key, 'node-save')).toBe('public_url_invalid');
     expect(errorMessage(responseError('UNKNOWN', 'secret'), 'fallback', (key) => key, 'node-save')).toBe('fallback');
+  });
+
+  it.each(['en', 'ru'] as const)('uses application-specific errors and readiness guidance in %s', (locale) => {
+    const text = translations[locale];
+    const trans = (key: string) => text[key as keyof typeof text];
+    expect(errorMessage(responseError('CONFIGURE_FAILED'), text.apply_configuration_failed, trans, 'game-configure')).toBe(text.game_apply_configure_failed);
+    expect(errorMessage(responseError('GAME_CONFIG_UPDATE_FAILED'), text.apply_configuration_failed, trans, 'game-configure')).toBe(text.game_apply_game_config_update_failed);
+    expect(errorMessage(responseError('CONFIGURATION_NOT_READY'), text.apply_configuration_failed, trans, 'game-configure')).toBe(text.configuration_not_ready);
   });
 });

@@ -23,9 +23,9 @@ same service definition leaves the running service alone.
 
 Invoked by the panel's FastDL plugin as a daemon task:
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File
-    "{node_work_path}\.plugins\fastdla\install-windows.ps1"
-    -InstallDir "{node_work_path}\.plugins\fastdla"
-    -ConfigPath "{node_work_path}\.plugins\fastdla\config.json"
+    "{node_work_path}\.plugins\i3z7ix336msd4\install-windows.ps1"
+    -InstallDir "{node_work_path}\.plugins\i3z7ix336msd4"
+    -ConfigPath "{node_work_path}\.plugins\i3z7ix336msd4\config.json"
 #>
 
 param(
@@ -82,7 +82,7 @@ Usage: powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 [
 Required:
   -InstallDir DIR      Private plugin directory holding the executable,
                        $SERVERS_SUBDIR\ and $CACHE_SUBDIR\ (the panel passes
-                       <work path>\.plugins\fastdla)
+                       <work path>\.plugins\i3z7ix336msd4)
   -ConfigPath FILE     FastDL configuration file, inside -InstallDir; the panel
                        writes it before this script runs. Defaults to
                        <InstallDir>\config.json

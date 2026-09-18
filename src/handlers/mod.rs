@@ -23,5 +23,6 @@ pub fn handle<H: HostApi>(host: &mut H, route: RouteId, parts: &RequestParts) ->
         RouteId::NodeSync => nodes::sync(host, parts),
         RouteId::ServerFastdlGet => servers::get(host, parts),
         RouteId::ServerFastdlUpdate => servers::update(host, parts),
+        RouteId::ServerFastdlConfigure => servers::configure(host, parts),
     }
 }

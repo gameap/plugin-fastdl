@@ -48,7 +48,7 @@ export async function settle() {
 }
 export async function mountComponent(render: () => VNode) {
   const app = renderer.createApp({ setup: () => render });
-  for (const name of ['GButton', 'GIcon', 'GStatusBadge', 'GModal']) {
+  for (const name of ['GButton', 'GIcon', 'GStatusBadge', 'GModal', 'GBreadcrumbs', 'GEmpty']) {
     app.component(name, defineComponent({ inheritAttrs: false, setup: (_, { attrs, slots }) => () => h(name, attrs, slots.default?.()) }));
   }
   const root = element('root');

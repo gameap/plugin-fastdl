@@ -3,8 +3,8 @@ use crate::http::ApiError;
 use crate::router::RequestParts;
 
 const ADMIN_ABILITY: &str = "admin roles & permissions";
-const VIEW_ABILITY: &str = "plugin:fastdla:fastdl-view";
-const MANAGE_ABILITY: &str = "plugin:fastdla:fastdl-manage";
+const VIEW_ABILITY: &str = "plugin:i3z7ix336msd4:fastdl-view";
+const MANAGE_ABILITY: &str = "plugin:i3z7ix336msd4:fastdl-manage";
 
 pub struct ServerAccess {
     pub can_manage: bool,

@@ -126,6 +126,7 @@ pub struct DaemonTaskInfo {
 
 pub trait HostApi {
     fn get_server(&mut self, id: u64) -> HostResult<Option<ServerInfo>>;
+    fn get_game_engine(&mut self, code: &str) -> HostResult<Option<String>>;
 
     /// Returns all matching, non-deleted servers without pagination or ordering.
     /// An empty filter list leaves that field unrestricted.
@@ -185,7 +186,7 @@ pub struct WasmHost;
 mod wasm {
     use gameap_plugin_sdk::host;
     use gameap_plugin_sdk::proto::gameap::plugin::sdk::{
-        authz, crypto, daemontasks, nodecmd, nodefs, nodes, servers, storage,
+        authz, crypto, daemontasks, games, nodecmd, nodefs, nodes, servers, storage,
     };
     use gameap_plugin_sdk::proto::gameap::{DaemonTaskType, Node, Server};
 
@@ -220,6 +221,19 @@ mod wasm {
     }
 
     impl HostApi for WasmHost {
+        fn get_game_engine(&mut self, code: &str) -> HostResult<Option<String>> {
+            let response = host::games::get_game(&games::GetGameRequest {
+                code: code.to_owned(),
+            })
+            .map_err(call_err)?;
+
+            if !response.found {
+                return Ok(None);
+            }
+
+            Ok(response.game.map(|game| game.engine))
+        }
+
         fn get_server(&mut self, id: u64) -> HostResult<Option<ServerInfo>> {
             let response =
                 host::servers::get_server(&servers::GetServerRequest { id }).map_err(call_err)?;
@@ -512,6 +526,7 @@ pub mod mock {
 
     pub struct MockHost {
         pub servers: BTreeMap<u64, ServerInfo>,
+        pub game_engines: BTreeMap<String, String>,
         pub nodes: BTreeMap<u64, NodeInfo>,
         pub storage: BTreeMap<StorageKey, Vec<u8>>,
         /// (node_id, path) → uploaded content.
@@ -542,6 +557,7 @@ pub mod mock {
         fn default() -> Self {
             Self {
                 servers: BTreeMap::new(),
+                game_engines: BTreeMap::new(),
                 nodes: BTreeMap::new(),
                 storage: BTreeMap::new(),
                 files: BTreeMap::new(),
@@ -567,6 +583,10 @@ pub mod mock {
         /// The server dir is relative to the work path, as the panel stores it.
         pub fn standard() -> Self {
             let mut host = Self::default();
+            host.game_engines.extend([
+                ("cstrike".into(), "GoldSource".into()),
+                ("valve".into(), "GoldSource".into()),
+            ]);
             host.nodes.insert(
                 1,
                 NodeInfo {
@@ -603,6 +623,10 @@ pub mod mock {
     }
 
     impl HostApi for MockHost {
+        fn get_game_engine(&mut self, code: &str) -> HostResult<Option<String>> {
+            Ok(self.game_engines.get(code).cloned())
+        }
+
         fn get_server(&mut self, id: u64) -> HostResult<Option<ServerInfo>> {
             Ok(self.servers.get(&id).cloned())
         }

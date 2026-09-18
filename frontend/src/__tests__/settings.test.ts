@@ -52,7 +52,7 @@ describe('server settings', () => {
     can_manage: true, supported: true, node_ready: true, synced: true, warnings: [],
   };
   it('sends only writable fields, excluding permissions and generated paths', () => {
-    expect(Object.keys(editableSettings(server)).sort()).toEqual(['autoindex', 'enabled', 'engine', 'game_dir', 'generate_bz2', 'manage_game_config']);
+    expect(Object.keys(editableSettings(server)).sort()).toEqual(['autoindex', 'enabled', 'game_dir', 'generate_bz2', 'manage_game_config']);
   });
   it('detects configuration management and compression edits', () => {
     const form = editableSettings(server);

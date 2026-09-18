@@ -78,7 +78,7 @@ export default defineConfig({
     plugins: [vue()],
     test: {
         testTransformMode: {
-            web: ['**/FastDLTab.test.ts', '**/NodeSettings.test.ts'],
+            web: ['**/FastDLTab.test.ts', '**/NodeSettings.test.ts', '**/AdminPage.test.ts'],
         },
     },
     build: {

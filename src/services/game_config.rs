@@ -1,13 +1,22 @@
 //! Invokes the Go helper so game files are never accessed through the broader
 //! node file API. The helper opens every path component without following links.
 
-use crate::domain::{ConfigureResponse, NodeOs, ServerState, validate_relative};
+use crate::domain::{ConfigureResponse, Engine, NodeOs, ServerState, validate_relative};
 use crate::host_api::{CommandOutput, HostApi};
 use crate::http::ApiError;
 use crate::services::{node_setup, paths};
 use crate::shell::{shell_join, shell_join_windows};
 
 const MAX_DIAGNOSTIC_CHARS: usize = 2048;
+
+pub fn commands(engine: Engine, download_url: &str) -> Vec<String> {
+    match engine {
+        Engine::Goldsource | Engine::Source => vec![
+            format!("sv_downloadurl \"{download_url}\""),
+            "sv_allowdownload \"1\"".into(),
+        ],
+    }
+}
 
 pub fn apply<H: HostApi>(
     host: &mut H,
