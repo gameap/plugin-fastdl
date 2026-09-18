@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::domain::{NodeConfig, NodeSetupStatus, ServerState, SetupInput, SetupStatus};
 use crate::host_api::mock::MockHost;
-use crate::host_api::{CommandOutput, HostApi, StorageEntity, TaskStatus};
+use crate::host_api::{CommandOutput, HostApi, HostApiError, StorageEntity, TaskStatus};
 use crate::router;
 use crate::services::{node_setup, store, sync};
 
@@ -882,11 +882,31 @@ fn cleanup_failure_keeps_the_previous_route_disabled() {
 
 #[test]
 fn successful_installation_task_requires_a_verified_binary() {
-    for (version_output, expected_status) in [
-        ("gameap-fastdl 0.2.3\n", SetupStatus::Installed),
-        ("another-service 0.2.3\n", SetupStatus::Failed),
+    for (os, work_path, version_output, expected_version) in [
+        ("linux", "/srv/gameap", "gameap-fastdl 0.2.3\n", "0.2.3"),
+        (
+            "linux",
+            "/srv/gameap",
+            concat!(
+                "/srv/gameap# /srv/gameap/.plugins/fastdla/gameap-fastdl version\n\n",
+                "gameap-fastdl v0.0.1\n\nExited with 0\n",
+            ),
+            "v0.0.1",
+        ),
+        (
+            "windows",
+            r"C:\GameAP",
+            concat!(
+                "C:\\GameAP# C:\\GameAP\\.plugins\\fastdla\\gameap-fastdl.exe version\r\n\r\n",
+                "  gameap-fastdl v0.0.1 \r\n\r\nExited with 0\r\n",
+            ),
+            "v0.0.1",
+        ),
     ] {
         let mut host = installed_host();
+        let node = host.nodes.get_mut(&1).unwrap();
+        node.os = os.into();
+        node.work_path = work_path.into();
         let task_id = start_installation(&mut host);
         host.task_states.get_mut(&task_id).unwrap().status = TaskStatus::Success;
         host.command_results.push_back(CommandOutput {
@@ -901,20 +921,202 @@ fn successful_installation_task_requires_a_verified_binary() {
 
         let status: NodeSetupStatus =
             serde_json::from_slice(&response.body).expect("installation status is JSON");
-        assert_eq!(status.status, expected_status);
+        assert_eq!(status.status, SetupStatus::Installed, "{version_output}");
         assert_eq!(status.task_id, task_id);
         assert_eq!(store::get_status(&mut host, 1).unwrap(), status);
+        assert_eq!(status.version, expected_version);
+        assert!(status.error_message.is_empty());
+        assert!(host.logs.is_empty());
+    }
+}
 
-        if expected_status == SetupStatus::Installed {
-            assert_eq!(status.version, "0.2.3");
-            assert!(status.error_message.is_empty());
-        } else {
-            assert!(status.version.is_empty());
-            assert_eq!(
-                status.error_message,
-                "Installed binary could not be verified"
-            );
+#[test]
+fn installation_verification_rejects_invalid_versions_and_failed_commands() {
+    for (output, exit_code, error) in [
+        ("another-service 0.2.3\n".into(), 0, None),
+        ("gameap-fastdl \n".into(), 0, None),
+        ("gameap-fastdl v0.2.3 unexpected\n".into(), 0, None),
+        (format!("gameap-fastdl {}\n", "v".repeat(65)), 0, None),
+        (
+            "/srv/gameap# /srv/gameap/.plugins/fastdla/gameap-fastdl version\n\nExited with 0\n"
+                .into(),
+            0,
+            None,
+        ),
+        ("gameap-fastdl v0.2.3\n".into(), 9, None),
+        (
+            "gameap-fastdl v0.2.3\n".into(),
+            0,
+            Some("private daemon error".into()),
+        ),
+    ] {
+        let mut host = installed_host();
+        let task_id = start_installation(&mut host);
+        host.task_states.get_mut(&task_id).unwrap().status = TaskStatus::Success;
+        host.command_results.push_back(CommandOutput {
+            output,
+            exit_code,
+            error,
+        });
+
+        let status = node_setup::get_status(&mut host, 1).unwrap();
+        assert_eq!(status.status, SetupStatus::Failed);
+        assert!(status.version.is_empty());
+        assert!(
+            status
+                .error_message
+                .starts_with("Installed binary could not be verified:")
+        );
+        assert!(
+            status
+                .error_message
+                .contains("Check the GameAP plugin logs.")
+        );
+        if exit_code != 0 {
+            assert!(status.error_message.contains(&format!("code {exit_code}")));
         }
+        assert!(!status.error_message.contains("private daemon error"));
+        assert!(!status.error_message.contains("/srv/gameap"));
+        assert_eq!(store::get_status(&mut host, 1).unwrap(), status);
+        assert_eq!(host.logs.len(), 1);
+        let log = &host.logs[0];
+        assert!(
+            log.starts_with("ERROR [fastdl] Installation verification failed:"),
+            "{log}"
+        );
+        assert!(log.contains("node_id=1"), "{log}");
+        assert!(log.contains(&format!("task_id={task_id}")), "{log}");
+        assert!(log.contains(&format!("exit_code={exit_code}")), "{log}");
+        assert!(
+            log.contains("/srv/gameap/.plugins/fastdla/gameap-fastdl version"),
+            "{log}"
+        );
+
+        assert_eq!(node_setup::get_status(&mut host, 1).unwrap(), status);
+        assert_eq!(host.commands.len(), 1);
+        assert_eq!(host.logs.len(), 1);
+    }
+}
+
+#[test]
+fn installation_verification_details_are_escaped_bounded_and_private() {
+    let mut host = installed_host();
+    let task_id = start_installation(&mut host);
+    host.task_states.get_mut(&task_id).unwrap().status = TaskStatus::Success;
+    host.command_results.push_back(CommandOutput {
+        output: format!("private output\n\r\t{}private tail", "я".repeat(5000)),
+        exit_code: 7,
+        error: Some("private daemon error\nforged log line".into()),
+    });
+
+    let response = router::dispatch(&mut host, &request(1, "GET", "/nodes/1/status", json!({})));
+    assert_eq!(response.status_code, 200);
+    let body = String::from_utf8(response.body).unwrap();
+    assert!(!body.contains("private"));
+    assert!(!body.contains("/srv/gameap"));
+    assert!(!body.contains("gameap-fastdl version"));
+    let status = store::get_status(&mut host, 1).unwrap();
+    assert!(status.error_message.contains("node could not execute"));
+
+    assert_eq!(host.logs.len(), 1);
+    let log = &host.logs[0];
+    assert!(log.contains("private output\\n\\r\\t"), "{log}");
+    assert!(
+        log.contains("private daemon error\\nforged log line"),
+        "{log}"
+    );
+    assert!(log.contains(" [truncated]"));
+    assert!(!log.contains("private tail"));
+    assert_eq!(log.lines().count(), 1);
+    assert!(log.chars().count() < 4600);
+}
+
+#[test]
+fn installation_verification_transport_failure_is_logged_and_retryable() {
+    let mut host = installed_host();
+    let task_id = start_installation(&mut host);
+    host.task_states.get_mut(&task_id).unwrap().status = TaskStatus::Success;
+    host.command_error = Some(HostApiError::Call(
+        "private connection detail\nfailed".into(),
+    ));
+
+    let response = router::dispatch(&mut host, &request(1, "GET", "/nodes/1/status", json!({})));
+    assert_eq!(response.status_code, 502);
+    assert!(!String::from_utf8_lossy(&response.body).contains("private connection detail"));
+    assert_eq!(
+        store::get_status(&mut host, 1).unwrap().status,
+        SetupStatus::Installing
+    );
+    assert!(host.logs.iter().any(|log| {
+        log.starts_with("ERROR [fastdl] Installation verification failed:")
+            && log.contains("node_id=1")
+            && log.contains(&format!("task_id={task_id}"))
+            && log.contains("private connection detail\\nfailed")
+    }));
+
+    host.command_results.push_back(CommandOutput {
+        output: "gameap-fastdl v0.0.1\n".into(),
+        exit_code: 0,
+        error: None,
+    });
+    assert_eq!(
+        node_setup::get_status(&mut host, 1).unwrap().status,
+        SetupStatus::Installed
+    );
+    assert_eq!(host.commands.len(), 2);
+}
+
+#[test]
+fn legacy_verification_failure_is_rechecked_without_reinstalling() {
+    for path in ["/nodes/1/status", "/admin/nodes"] {
+        let mut host = installed_host();
+        let task_id = start_installation(&mut host);
+        host.task_states.get_mut(&task_id).unwrap().status = TaskStatus::Success;
+        let mut status = store::get_status(&mut host, 1).unwrap();
+        status.status = SetupStatus::Failed;
+        status.error_message = "Installed binary could not be verified".into();
+        store::save_status(&mut host, 1, &status).unwrap();
+        host.uploads.clear();
+        host.command_results.push_back(CommandOutput {
+            output: "/srv/gameap# gameap-fastdl version\n\ngameap-fastdl v0.0.1\n\nExited with 0\n"
+                .into(),
+            exit_code: 0,
+            error: None,
+        });
+
+        let response = router::dispatch(&mut host, &request(1, "GET", path, json!({})));
+        assert_eq!(response.status_code, 200, "{path}");
+        let status = store::get_status(&mut host, 1).unwrap();
+        assert_eq!(status.status, SetupStatus::Installed, "{path}");
+        assert_eq!(status.version, "v0.0.1");
+        assert!(status.error_message.is_empty());
+        assert!(host.uploads.is_empty());
+        assert_eq!(host.created_tasks.len(), 1);
+        assert_eq!(host.commands.len(), 1);
+    }
+}
+
+#[test]
+fn unrelated_installation_failures_are_not_rechecked() {
+    for (task_status, error_message) in [
+        (TaskStatus::Success, "Installation timed out"),
+        (TaskStatus::Error, "Installed binary could not be verified"),
+    ] {
+        let mut host = installed_host();
+        let task_id = start_installation(&mut host);
+        host.task_states.get_mut(&task_id).unwrap().status = task_status;
+        let mut status = store::get_status(&mut host, 1).unwrap();
+        status.status = SetupStatus::Failed;
+        status.error_message = error_message.into();
+        store::save_status(&mut host, 1, &status).unwrap();
+
+        let refreshed = node_setup::get_status(&mut host, 1).unwrap();
+        assert_eq!(refreshed.status, SetupStatus::Failed);
+        if task_status == TaskStatus::Success {
+            assert_eq!(refreshed, status);
+        }
+        assert!(host.commands.is_empty());
+        assert!(host.logs.is_empty());
     }
 }
 

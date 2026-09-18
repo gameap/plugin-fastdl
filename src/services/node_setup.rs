@@ -13,6 +13,8 @@ use super::{store, sync};
 
 const INSTALLING_TIMEOUT_SECS: i64 = 1800;
 const VERSION_PREFIX: &str = "gameap-fastdl ";
+const LEGACY_VERIFICATION_ERROR: &str = "Installed binary could not be verified";
+const MAX_DIAGNOSTIC_CHARS: usize = 4096;
 const LINUX_RESTART_COMMAND: &str = "systemctl restart gameap-fastdl";
 const WINDOWS_RESTART_COMMAND: &str = concat!(
     "powershell -NoProfile -NonInteractive -Command ",
@@ -110,7 +112,9 @@ pub fn setup_node<H: HostApi>(
 
 pub fn get_status<H: HostApi>(host: &mut H, node_id: u64) -> Result<NodeSetupStatus, ApiError> {
     let mut status = store::get_status(host, node_id)?;
-    if status.status != SetupStatus::Installing {
+    let retry_legacy_verification =
+        status.status == SetupStatus::Failed && status.error_message == LEGACY_VERIFICATION_ERROR;
+    if status.status != SetupStatus::Installing && !retry_legacy_verification {
         return Ok(status);
     }
 
@@ -254,24 +258,73 @@ fn verify_installation<H: HostApi>(
         shell_join(&[&binary_path, "version"])
     };
 
-    let output = host.execute_command(node_id, &command)?;
-    let version_output = output.output.trim();
-    if output.exit_code != 0
-        || output.error.is_some()
-        || !version_output.starts_with(VERSION_PREFIX)
-    {
+    let output = match host.execute_command(node_id, &command) {
+        Ok(output) => output,
+        Err(error) => {
+            host.log_error(&format!(
+                "[fastdl] Installation verification failed: node_id={node_id} task_id={} command={:?} host_error={:?}",
+                status.task_id,
+                diagnostic_detail(&command),
+                diagnostic_detail(error.message()),
+            ));
+            return Err(error.into());
+        }
+    };
+    let version = installation_version(&output.output);
+    let failure = if output.error.is_some() {
+        Some("the node could not execute the version command".to_owned())
+    } else if output.exit_code != 0 {
+        Some(format!(
+            "the version command exited with code {}",
+            output.exit_code
+        ))
+    } else if version.is_none() {
+        Some("the command output has no valid gameap-fastdl version line".to_owned())
+    } else {
+        None
+    };
+    if let Some(reason) = failure {
+        host.log_error(&format!(
+            "[fastdl] Installation verification failed: node_id={node_id} task_id={} command={:?} exit_code={} error={:?} output={:?} reason={reason}",
+            status.task_id,
+            diagnostic_detail(&command),
+            output.exit_code,
+            output.error.as_deref().map(diagnostic_detail),
+            diagnostic_detail(&output.output),
+        ));
         status.status = SetupStatus::Failed;
-        status.error_message = "Installed binary could not be verified".into();
+        status.version.clear();
+        status.error_message =
+            format!("{LEGACY_VERIFICATION_ERROR}: {reason}. Check the GameAP plugin logs.");
 
         return Ok(());
     }
 
     status.status = SetupStatus::Installed;
-    status.version = version_output
-        .trim_start_matches(VERSION_PREFIX)
-        .chars()
-        .take(64)
-        .collect();
+    status.version = version.unwrap_or_default().to_owned();
+    status.error_message.clear();
 
     Ok(())
+}
+
+fn installation_version(output: &str) -> Option<&str> {
+    // Daemon responses can wrap stdout with the command prompt and exit code.
+    output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(VERSION_PREFIX))
+        .map(str::trim)
+        .find(|version| {
+            !version.is_empty()
+                && version.chars().count() <= 64
+                && !version.chars().any(char::is_whitespace)
+        })
+}
+
+fn diagnostic_detail(value: &str) -> String {
+    let mut characters = value.chars();
+    let mut detail: String = characters.by_ref().take(MAX_DIAGNOSTIC_CHARS).collect();
+    if characters.next().is_some() {
+        detail.push_str(" [truncated]");
+    }
+    detail
 }

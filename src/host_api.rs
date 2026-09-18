@@ -522,6 +522,7 @@ pub mod mock {
         pub commands: Vec<String>,
         /// Canned execute_command results, popped one per call.
         pub command_results: VecDeque<CommandOutput>,
+        pub command_error: Option<HostApiError>,
         /// Commands whose string contains a needle return the paired output
         /// (checked before `command_results`).
         pub fail_on: Vec<(String, CommandOutput)>,
@@ -547,6 +548,7 @@ pub mod mock {
                 uploads: Vec::new(),
                 commands: Vec::new(),
                 command_results: VecDeque::new(),
+                command_error: None,
                 fail_on: Vec::new(),
                 created_tasks: Vec::new(),
                 task_states: BTreeMap::new(),
@@ -625,6 +627,10 @@ pub mod mock {
 
         fn execute_command(&mut self, _node_id: u64, command: &str) -> HostResult<CommandOutput> {
             self.commands.push(command.to_string());
+
+            if let Some(error) = self.command_error.take() {
+                return Err(error);
+            }
 
             for (needle, output) in &self.fail_on {
                 if command.contains(needle.as_str()) {
