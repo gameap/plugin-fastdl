@@ -14,16 +14,6 @@ export function isPublicUrl(value: string): boolean {
   }
 }
 
-export function isDownloadUrl(value: string): boolean {
-  if (!isPublicUrl(value)) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password && !url.hash;
-  } catch {
-    return false;
-  }
-}
-
 export function isGameDirectory(value: string): boolean {
   if (value === '') return true;
   if (new TextEncoder().encode(value).length > 512 || /[\x00-\x1f\x7f-\x9f\\:%"'<>|?*{}]/.test(value)) return false;

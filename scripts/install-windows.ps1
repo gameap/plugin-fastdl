@@ -3,8 +3,8 @@
 <#
 GameAP FastDL installation script for Windows.
 
-Downloads the gameap-fastdl executable published at -DownloadUrl, verifies it
-against -Sha256 before it is ever executed, installs it into the private plugin
+Resolves the latest stable gameap-fastdl release, verifies its published SHA256
+before it is ever executed, installs it into the private plugin
 directory and registers the Windows service that serves FastDL content.
 
 Requires an administrative account. The service runs as LocalSystem, and the
@@ -24,7 +24,6 @@ same service definition leaves the running service alone.
 Invoked by the panel's FastDL plugin as a daemon task:
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File
     "{node_work_path}\.plugins\fastdla\install-windows.ps1"
-    -DownloadUrl https://... -Sha256 <64 hex characters>
     -InstallDir "{node_work_path}\.plugins\fastdla"
     -ConfigPath "{node_work_path}\.plugins\fastdla\config.json"
 #>
@@ -52,6 +51,7 @@ trap {
 }
 
 $COMPONENT = "gameap-fastdl"
+$GITHUB_REPO = "gameap/gameap-fastdl"
 $SERVICE_NAME = "gameap-fastdl"
 $SERVICE_DISPLAY_NAME = "GameAP FastDL"
 $SERVICE_DESCRIPTION = "Serves GoldSource and Source game content for FastDL downloads."
@@ -80,10 +80,6 @@ GameAP FastDL installation script for Windows
 Usage: powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 [options]
 
 Required:
-  -DownloadUrl URL     HTTPS URL of the gameap-fastdl.exe build to install
-  -Sha256 HEX          Expected SHA256 of that build (64 hex characters),
-                       obtained independently from the trusted build; nothing is
-                       executed before the download matches it
   -InstallDir DIR      Private plugin directory holding the executable,
                        $SERVERS_SUBDIR\ and $CACHE_SUBDIR\ (the panel passes
                        <work path>\.plugins\fastdla)
@@ -92,6 +88,11 @@ Required:
                        <InstallDir>\config.json
 
 Other:
+  -DownloadUrl URL     Override the latest stable GitHub release with an explicit
+                       HTTPS executable URL; requires -Sha256
+  -Sha256 HEX          Expected SHA256 for -DownloadUrl (64 hex characters).
+                       Without this pair, the release asset's matching .sha256
+                       sidecar is required
   -FixAcl              Re-apply the directory permissions to files that already
                        exist. Needed once on a node installed by a release that
                        set permissions per file instead of by inheritance; the
@@ -330,7 +331,7 @@ function Assert-HttpsUri {
 }
 
 function Save-Download {
-    param([Uri]$Uri, [string]$Destination, [int]$TimeoutSeconds)
+    param([Uri]$Uri, [string]$Destination, [int]$TimeoutSeconds, [long]$MaxBytes = $MAX_DOWNLOAD_BYTES)
 
     Add-Type -AssemblyName System.Net.Http
 
@@ -361,8 +362,8 @@ function Save-Download {
                 }
 
                 $response.EnsureSuccessStatusCode() | Out-Null
-                if ($response.Content.Headers.ContentLength -gt $MAX_DOWNLOAD_BYTES) {
-                    throw "The download declares $($response.Content.Headers.ContentLength) bytes, over the $MAX_DOWNLOAD_BYTES byte limit"
+                if ($response.Content.Headers.ContentLength -gt $MaxBytes) {
+                    throw "The download declares $($response.Content.Headers.ContentLength) bytes, over the $MaxBytes byte limit"
                 }
 
                 $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
@@ -380,8 +381,8 @@ function Save-Download {
                         }
                         # A chunked response declares no length, so the cap has
                         # to be enforced while reading as well.
-                        if ($total -gt $MAX_DOWNLOAD_BYTES) {
-                            throw "The download is over the $MAX_DOWNLOAD_BYTES byte limit"
+                        if ($total -gt $MaxBytes) {
+                            throw "The download is over the $MaxBytes byte limit"
                         }
                         $file.Write($buffer, 0, $read)
                     }
@@ -397,6 +398,113 @@ function Save-Download {
     } finally {
         $client.Dispose()
         $handler.Dispose()
+    }
+}
+
+function Get-ReleaseArchitecture {
+    $architecture = $env:PROCESSOR_ARCHITECTURE
+    if ($env:PROCESSOR_ARCHITEW6432) { $architecture = $env:PROCESSOR_ARCHITEW6432 }
+    switch ($architecture) {
+        "AMD64" { return "amd64" }
+        "ARM64" { return "arm64" }
+        default { throw "Only amd64 and arm64 releases are available; this node reports '$architecture'." }
+    }
+}
+
+function Get-ReleaseTagFromUri {
+    param([string]$ReleaseUri)
+
+    $prefix = "https://github.com/$GITHUB_REPO/releases/tag/"
+    if (-not $ReleaseUri.StartsWith($prefix, [StringComparison]::Ordinal)) {
+        throw "No stable $COMPONENT release is published."
+    }
+    $tag = $ReleaseUri.Substring($prefix.Length)
+    if ($tag -notmatch '\A[A-Za-z0-9][A-Za-z0-9._+-]*\z' -or $tag.Length -gt 128) {
+        throw "The latest release has an invalid tag."
+    }
+    return $tag
+}
+
+function Get-LatestReleaseTag {
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object Net.Http.HttpClientHandler
+    $handler.AllowAutoRedirect = $false
+    $client = New-Object Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(60)
+    $client.DefaultRequestHeaders.Add("User-Agent", "gameap-fastdl-installer")
+    $current = [Uri]"https://github.com/$GITHUB_REPO/releases/latest"
+    try {
+        for ($redirect = 0; $redirect -le $MAX_REDIRECTS; $redirect++) {
+            Assert-HttpsUri -Uri $current -What "The release URL"
+            $request = New-Object Net.Http.HttpRequestMessage([Net.Http.HttpMethod]::Head, $current)
+            $response = $null
+            try {
+                $response = $client.SendAsync($request).GetAwaiter().GetResult()
+                if ([int]$response.StatusCode -ge 300 -and [int]$response.StatusCode -lt 400) {
+                    if (-not $response.Headers.Location -or $redirect -eq $MAX_REDIRECTS) {
+                        throw "Could not resolve the latest stable $COMPONENT release."
+                    }
+                    $current = New-Object Uri($current, $response.Headers.Location)
+                    continue
+                }
+                $response.EnsureSuccessStatusCode() | Out-Null
+                return Get-ReleaseTagFromUri -ReleaseUri $current.AbsoluteUri
+            } finally {
+                if ($response) { $response.Dispose() }
+                $request.Dispose()
+            }
+        }
+    } finally {
+        $client.Dispose()
+        $handler.Dispose()
+    }
+}
+
+function Read-ReleaseChecksum {
+    param([string]$Content, [string]$Asset)
+
+    $lines = @($Content -split '\r?\n' | Where-Object { $_.Trim() })
+    if ($lines.Count -ne 1 -or $lines[0] -notmatch '\A([a-fA-F0-9]{64})(?:[ \t]+\*?([A-Za-z0-9._+-]+))?[ \t]*\z') {
+        throw "Invalid SHA256 sidecar for $Asset."
+    }
+    $digest = $Matches[1]
+    if ($Matches[2] -and $Matches[2] -cne $Asset) {
+        throw "The SHA256 sidecar names a different release asset."
+    }
+    return $digest.ToLowerInvariant()
+}
+
+function Resolve-Release {
+    $architecture = Get-ReleaseArchitecture
+    $tag = Get-LatestReleaseTag
+    $asset = "$COMPONENT-$tag-windows-$architecture.exe"
+    $url = "https://github.com/$GITHUB_REPO/releases/download/$tag/$asset"
+    $checksumPath = [IO.Path]::GetTempFileName()
+    try {
+        Save-Download -Uri "$url.sha256" -Destination $checksumPath -TimeoutSeconds 60 -MaxBytes 4096
+        $digest = Read-ReleaseChecksum -Content ([IO.File]::ReadAllText($checksumPath)) -Asset $asset
+    } finally {
+        Remove-Item -LiteralPath $checksumPath -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "Selected $COMPONENT $tag for windows/$architecture."
+    return [pscustomobject]@{ DownloadUrl = $url; Sha256 = $digest }
+}
+
+function Assert-DownloadOptions {
+    param([string]$Url, [string]$Digest)
+
+    if ([bool]$Url -xor [bool]$Digest) {
+        throw "-DownloadUrl and -Sha256 must be supplied together."
+    }
+    if ($Url) {
+        if ($Digest -notmatch '\A[a-fA-F0-9]{64}\z') {
+            throw "-Sha256 must be 64 hexadecimal characters."
+        }
+        $parsedUri = $null
+        if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$parsedUri)) {
+            throw "-DownloadUrl is not a valid absolute URL."
+        }
+        Assert-HttpsUri -Uri $parsedUri -What "-DownloadUrl"
     }
 }
 
@@ -748,13 +856,11 @@ if ($Check) {
     exit (Show-InstallStatus -Name $SERVICE_NAME -Binary $binary -ConfigPath $ConfigPath)
 }
 
-if (-not $DownloadUrl -or -not $Sha256 -or -not $InstallDir) {
-    Exit-WithError "-DownloadUrl, -Sha256 and -InstallDir are required. Use -Help for usage information."
+if (-not $InstallDir) {
+    Exit-WithError "-InstallDir is required. Use -Help for usage information."
 }
 
-if ($Sha256 -notmatch '^[a-fA-F0-9]{64}$') {
-    Exit-WithError "-Sha256 must be 64 hexadecimal characters, got '$Sha256'"
-}
+Assert-DownloadOptions -Url $DownloadUrl -Digest $Sha256
 $Sha256 = $Sha256.ToLowerInvariant()
 
 Assert-PlainAbsolutePath -Name "-InstallDir" -Path $InstallDir
@@ -763,16 +869,6 @@ Assert-PlainAbsolutePath -Name "-ConfigPath" -Path $ConfigPath
 if ((Split-Path -Parent $ConfigPath) -ne $InstallDir) {
     Exit-WithError ("-ConfigPath must live directly in -InstallDir, got '$ConfigPath'. " +
         "$COMPONENT resolves $SERVERS_SUBDIR and $CACHE_SUBDIR against the configuration file's own directory.")
-}
-
-$uri = $null
-if (-not [Uri]::TryCreate($DownloadUrl, [UriKind]::Absolute, [ref]$uri)) {
-    Exit-WithError "-DownloadUrl is not a valid absolute URL: '$DownloadUrl'"
-}
-try {
-    Assert-HttpsUri -Uri $uri -What "-DownloadUrl"
-} catch {
-    Exit-WithError $_.Exception.Message
 }
 
 if (-not (Test-Administrator)) {
@@ -788,6 +884,13 @@ $cacheDir = Join-Path $InstallDir $CACHE_SUBDIR
 foreach ($path in @($InstallDir, $serversDir, $cacheDir, $binary, $ConfigPath)) {
     Assert-NoReparsePath $path
 }
+
+if (-not $DownloadUrl) {
+    $release = Resolve-Release
+    $DownloadUrl = $release.DownloadUrl
+    $Sha256 = $release.Sha256
+}
+$uri = [Uri]$DownloadUrl
 
 Write-Host "Preparing $InstallDir..."
 

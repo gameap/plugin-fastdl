@@ -23,11 +23,6 @@ export interface FastDLNode extends NodeStatus {
   config: NodeConfig;
 }
 
-export interface InstallRequest {
-  download_url: string;
-  sha256: string;
-}
-
 export interface ServerSettings {
   enabled: boolean;
   autoindex: boolean;
@@ -54,7 +49,7 @@ export const fastdlApi = {
   nodes: async () => (await axios.get<{ nodes: FastDLNode[] }>(`${BASE}/admin/nodes`)).data.nodes,
   status: async (id: number) => (await axios.get<NodeStatus>(`${BASE}/nodes/${id}/status`)).data,
   saveNode: async (id: number, config: NodeConfig) => (await axios.put<NodeConfig>(`${BASE}/nodes/${id}/config`, config)).data,
-  setup: async (id: number, request: InstallRequest) => (await axios.post<NodeStatus>(`${BASE}/nodes/${id}/setup`, request)).data,
+  setup: async (id: number) => (await axios.post<NodeStatus>(`${BASE}/nodes/${id}/setup`, {})).data,
   sync: async (id: number) => (await axios.post<{ synced: boolean }>(`${BASE}/nodes/${id}/sync`)).data,
   server: async (id: number) => (await axios.get<ServerFastDL>(`${BASE}/servers/${id}/fastdl`)).data,
   saveServer: async (id: number, settings: ServerSettings) => (await axios.put<ServerFastDL>(`${BASE}/servers/${id}/fastdl`, settings)).data,

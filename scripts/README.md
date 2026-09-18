@@ -3,38 +3,82 @@
 Installers for `gameap-fastdl`, the node-side Go service the FastDL plugin
 manages. One per supported node platform:
 
-| Script                 | Platform             | Service                    |
-|------------------------|----------------------|----------------------------|
-| `install-linux.sh`     | Linux, root, systemd | `gameap-fastdl.service`    |
-| `install-windows.ps1`  | Windows, elevated    | `gameap-fastdl` SCM service |
+| Script                | Platform             | Service                     |
+|-----------------------|----------------------|-----------------------------|
+| `install-linux.sh`    | Linux, root, systemd | `gameap-fastdl.service`     |
+| `install-windows.ps1` | Windows, elevated    | `gameap-fastdl` SCM service |
 
 ## How they reach a node
 
-Unlike the installers in the [`gameap/scripts`](https://github.com/gameap/scripts)
-repository, these are **not** fetched with `get-tool`. They are compiled into
-`fastdl.wasm` with `include_bytes!` (`src/services/node_setup.rs`), uploaded to
-`<work path>/.plugins/fastdla/` with mode `0700` and run as a single daemon task:
+Both scripts are bundled into `fastdl.wasm` at build time. The plugin selects the
+script for the node's OS, uploads it through the node file API with mode `0700`
+into `.plugins/fastdla`, and creates one daemon task to run it. The script, binary
+and configuration live in this private directory below the daemon work path.
 
-```
-/bin/bash {node_work_path}/.plugins/fastdla/install-linux.sh \
-    --download-url=https://... --sha256=<64 hex characters> \
-    --install-dir={node_work_path}/.plugins/fastdla \
-    --config={node_work_path}/.plugins/fastdla/config.json
-```
+Each installation replaces the private script with the version bundled in the
+plugin. Old `tools/install-linux.sh` and `tools/install-windows.ps1` files are no
+longer used, so a stale copy in the tools directory cannot affect installation.
 
-```
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File
-    "{node_work_path}\.plugins\fastdla\install-windows.ps1"
-    -DownloadUrl https://... -Sha256 <64 hex characters>
-    -InstallDir "{node_work_path}\.plugins\fastdla"
-    -ConfigPath "{node_work_path}\.plugins\fastdla\config.json"
+Linux task:
+
+```text
+/bin/bash '{node_work_path}/.plugins/fastdla/install-linux.sh' \
+    '--install-dir={node_work_path}/.plugins/fastdla' \
+    '--config={node_work_path}/.plugins/fastdla/config.json'
 ```
 
-**Editing a script therefore requires `make build` and a plugin upload.** A node
-never sees a newer script than the plugin that uploaded it, which is why the two
-argument lists can change together without a compatibility window.
-`installers_accept_the_options_the_plugin_passes` in `src/handlers/tests.rs`
-fails if an option is renamed on only one side.
+Windows task (the command is one line):
+
+```text
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{node_work_path}\.plugins\fastdla\install-windows.ps1" -InstallDir "{node_work_path}\.plugins\fastdla" -ConfigPath "{node_work_path}\.plugins\fastdla\config.json"
+```
+
+The examples use `{node_work_path}` to stand for the node's configured work
+directory. The plugin resolves the installer, install directory and configuration
+to validated absolute paths and quotes them for the node's platform, including
+paths containing spaces.
+
+Rebuild and deploy `fastdl.wasm` after changing a script: the plugin and its
+installers are shipped together. The tests in `src/handlers/tests.rs` check the
+uploaded script contents and the installer command for each platform.
+
+## Automatic releases
+
+With no download options, the script resolves GitHub's latest stable release of
+[`gameap/gameap-fastdl`](https://github.com/gameap/gameap-fastdl/releases), detects
+the node's native architecture, then fetches the binary and checksum from that
+specific tag. This keeps the two downloads together even if another release is
+published during installation. No extra JSON parser is required on the node.
+
+Publish these assets for each supported target. The filename includes the exact
+release tag, shown here as `v0.0.1`:
+
+| Target        | Binary asset                             | Checksum asset                                  |
+|---------------|------------------------------------------|-------------------------------------------------|
+| Linux amd64   | `gameap-fastdl-v0.0.1-linux-amd64`       | `gameap-fastdl-v0.0.1-linux-amd64.sha256`       |
+| Linux arm64   | `gameap-fastdl-v0.0.1-linux-arm64`       | `gameap-fastdl-v0.0.1-linux-arm64.sha256`       |
+| Windows amd64 | `gameap-fastdl-v0.0.1-windows-amd64.exe` | `gameap-fastdl-v0.0.1-windows-amd64.exe.sha256` |
+| Windows arm64 | `gameap-fastdl-v0.0.1-windows-arm64.exe` | `gameap-fastdl-v0.0.1-windows-arm64.exe.sha256` |
+
+Each `.sha256` file contains one 64-digit hexadecimal checksum, optionally followed
+by its exact binary filename in `sha256sum` format. Generate it from the trusted
+build output, for example from its `dist` directory:
+
+```sh
+sha256sum gameap-fastdl-v0.0.1-linux-amd64 > gameap-fastdl-v0.0.1-linux-amd64.sha256
+```
+
+A stable release and its binary/checksum assets must exist before automatic
+installation can succeed. Unsupported architectures, missing releases/assets,
+invalid checksum files, and checksum mismatches fail with a diagnostic in the
+daemon task output. Existing installations remain available when release
+resolution or verification fails.
+
+For custom builds, pass both `--download-url=URL` and `--sha256=HEX` on Linux, or
+`-DownloadUrl URL -Sha256 HEX` on Windows. These bypass release discovery and
+retain the same HTTPS and checksum validation. Passing only one is rejected.
+The plugin's setup API retains this optional pair for existing integrations;
+the installation form uses automatic selection.
 
 ## What each step is for
 
@@ -48,8 +92,9 @@ fails if an option is renamed on only one side.
 3. **Download over HTTPS only.** Redirects are re-checked for scheme and
    credentials at every hop, and the size cap is enforced while reading, not just
    from `Content-Length`.
-4. **Verify SHA256 before executing anything.** This ordering is the reason the
-   digest is passed in at all; nothing runs the download before it matches.
+4. **Verify SHA256 before executing anything.** The expected digest comes from
+   the release checksum asset or the explicit custom-build option; nothing runs
+   the download before it matches.
 5. **Validate the configuration** with `gameap-fastdl validate --config`, before
    the service definition is touched, so a bad configuration is one readable
    message instead of a restart loop.
@@ -64,7 +109,7 @@ fails if an option is renamed on only one side.
    and service definition are restored and the service is put back the way it
    was. A failed rollback says so loudly rather than leaving a node silently down.
 
-Re-running with the same `--sha256` skips the download and, when the service
+Re-running with the same resolved or supplied SHA256 skips the binary download and, when the service
 definition also matches and the service is running, changes nothing at all — so
 a re-run is a safe way to repair a damaged service without an outage.
 
@@ -75,10 +120,18 @@ unhealthy. The paths are read from the installed service when they are omitted:
 
 ```
 /bin/bash /srv/gameap/.plugins/fastdla/install-linux.sh --check
-powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Check
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\gameap\.plugins\fastdla\install-windows.ps1" -Check
 ```
 
 ## Testing locally
+
+Run `make test-scripts` for release-resolution tests with mocked downloads. These
+cover architecture selection, same-tag binary/checksum URLs, missing releases,
+malformed checksums, and custom download overrides without touching services.
+The Linux tests use Python 3 and Bash. The Windows suite also parses the full
+installer and runs under PowerShell on any OS; set `POWERSHELL=powershell` or an
+absolute executable path if it is not named `pwsh`. It is skipped when that
+executable is unavailable.
 
 `install-linux.sh` can be exercised end to end in a systemd container, against a
 real HTTPS source, without weakening the script:

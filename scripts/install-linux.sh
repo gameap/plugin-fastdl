@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # GameAP FastDL installation script for Linux.
-# Downloads the gameap-fastdl executable published at --download-url, verifies
-# it against --sha256 before it is ever executed, installs it into the private
+# Resolves the latest stable gameap-fastdl release, verifies its published
+# SHA256 before it is ever executed, installs it into the private
 # plugin directory and registers the systemd unit that serves FastDL content.
 #
 # Requires root and systemd. The unit is a system unit, and the plugin directory
@@ -21,7 +21,6 @@
 #
 # Invoked by the panel's FastDL plugin as a daemon task:
 #   /bin/bash {node_work_path}/.plugins/fastdla/install-linux.sh \
-#       --download-url=https://... --sha256=<64 hex characters> \
 #       --install-dir={node_work_path}/.plugins/fastdla \
 #       --config={node_work_path}/.plugins/fastdla/config.json
 
@@ -29,6 +28,7 @@ set -e
 umask 077
 
 COMPONENT="gameap-fastdl"
+GITHUB_REPO="gameap/gameap-fastdl"
 
 # The panel restarts the service by this name (services/node_setup.rs).
 UNIT_NAME="gameap-fastdl"
@@ -75,10 +75,6 @@ GameAP FastDL installation script for Linux
 Usage: $0 [OPTIONS]
 
 Required:
-    --download-url=URL      HTTPS URL of the gameap-fastdl executable
-    --sha256=HEX            Expected SHA256 of that executable (64 hex characters),
-                            obtained independently from the trusted build; nothing
-                            is executed before the download matches it
     --install-dir=DIR       Private plugin directory, absolute; holds the
                             executable, ${SERVERS_SUBDIR}/ and ${CACHE_SUBDIR}/
     --config=FILE           FastDL configuration file, absolute, inside
@@ -86,6 +82,11 @@ Required:
                             runs
 
 Other:
+    --download-url=URL      Override the latest stable GitHub release with an
+                            explicit HTTPS executable URL; requires --sha256
+    --sha256=HEX            Expected SHA256 for --download-url (64 hex characters).
+                            Without this pair, the release asset's matching
+                            .sha256 sidecar is required
     --check                 Report the installed version and service state and
                             exit without changing anything (exit 1 when
                             unhealthy). The paths are read from the installed
@@ -217,6 +218,90 @@ _sha256_of() {
     fi
 
     printf '%s' "$sum" | tr 'A-F' 'a-f'
+}
+
+_download_release_text() {
+    local content
+
+    if ! content="$(curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
+        --max-redirs 5 --connect-timeout 15 --max-time 60 --max-filesize "$2" \
+        --user-agent gameap-fastdl-installer "$1")"; then
+        echo "Error: could not download release metadata or checksum from $1" >&2
+        return 1
+    fi
+    if [ "${#content}" -gt "$2" ]; then
+        echo "Error: release metadata or checksum exceeds its size limit" >&2
+        return 1
+    fi
+    printf '%s' "$content"
+}
+
+_sidecar_sha256() {
+    awk -v wanted="$1" '
+        { sub(/\r$/, "") }
+        NF {
+            if (++lines != 1 || (NF != 1 && NF != 2)) exit 1
+            digest = $1
+            if (length(digest) != 64 || digest ~ /[^0-9a-fA-F]/) exit 1
+            if (NF == 2 && $2 != wanted && $2 != "*" wanted) exit 1
+        }
+        END { if (lines != 1) exit 1; print tolower(digest) }
+    '
+}
+
+resolve_release() {
+    local architecture asset release_url tag checksum
+
+    if [ "$(uname -s)" != Linux ]; then
+        echo "Error: this installer only runs on Linux" >&2
+        return 1
+    fi
+    case "$(uname -m)" in
+        x86_64|amd64) architecture=amd64 ;;
+        aarch64|arm64) architecture=arm64 ;;
+        *) echo "Error: only amd64 and arm64 releases are available" >&2; return 1 ;;
+    esac
+    if ! release_url="$(curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
+        --head --max-redirs 5 --connect-timeout 15 --max-time 60 --output /dev/null \
+        --user-agent gameap-fastdl-installer --write-out '%{url_effective}' \
+        "https://github.com/${GITHUB_REPO}/releases/latest")"; then
+        echo "Error: could not resolve the latest stable ${COMPONENT} release" >&2
+        return 1
+    fi
+    case "$release_url" in
+        "https://github.com/${GITHUB_REPO}/releases/tag/"*)
+            tag="${release_url##*/}" ;;
+        *) echo "Error: no stable ${COMPONENT} release is published" >&2; return 1 ;;
+    esac
+    if [[ ! "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || [ "${#tag}" -gt 128 ] \
+        || [ "$release_url" != "https://github.com/${GITHUB_REPO}/releases/tag/${tag}" ]; then
+        echo "Error: the latest release has an invalid tag" >&2
+        return 1
+    fi
+    asset="${COMPONENT}-${tag}-linux-${architecture}"
+    DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${tag}/${asset}"
+    checksum="$(_download_release_text "${DOWNLOAD_URL}.sha256" 4096)" || return 1
+    if ! SHA256="$(printf '%s\n' "$checksum" | _sidecar_sha256 "$asset")"; then
+        echo "Error: invalid SHA256 sidecar for ${asset}" >&2
+        return 1
+    fi
+    echo "Selected ${COMPONENT} ${tag} for linux/${architecture}."
+}
+
+validate_download_options() {
+    if { [ -n "$DOWNLOAD_URL" ] && [ -z "$SHA256" ]; } \
+        || { [ -z "$DOWNLOAD_URL" ] && [ -n "$SHA256" ]; }; then
+        echo "Error: --download-url and --sha256 must be supplied together" >&2
+        return 1
+    fi
+    if [ -n "$DOWNLOAD_URL" ]; then
+        _assert_https_url --download-url "$DOWNLOAD_URL"
+        if ! _is_sha256 "$SHA256"; then
+            echo "Error: --sha256 must be 64 hexadecimal characters" >&2
+            return 1
+        fi
+        SHA256="$(printf '%s' "$SHA256" | tr 'A-F' 'a-f')"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -523,19 +608,13 @@ if [ -n "$CHECK_ONLY" ]; then
     exit 0
 fi
 
-if [ -z "$DOWNLOAD_URL" ] || [ -z "$SHA256" ] || [ -z "$INSTALL_DIR" ] || [ -z "$CONFIG" ]; then
-    echo "Error: --download-url, --sha256, --install-dir and --config are required" >&2
+if [ -z "$INSTALL_DIR" ] || [ -z "$CONFIG" ]; then
+    echo "Error: --install-dir and --config are required" >&2
     echo "Use --help for usage information" >&2
     exit 1
 fi
 
-_assert_https_url --download-url "$DOWNLOAD_URL"
-
-if ! _is_sha256 "$SHA256"; then
-    echo "Error: --sha256 must be 64 hexadecimal characters, got '${SHA256}'" >&2
-    exit 1
-fi
-SHA256="$(printf '%s' "$SHA256" | tr 'A-F' 'a-f')"
+validate_download_options || exit 1
 
 INSTALL_DIR="${INSTALL_DIR%/}"
 if [ -z "$INSTALL_DIR" ]; then
@@ -598,6 +677,10 @@ for checked_path in \
 do
     _assert_no_symlinks "$checked_path"
 done
+
+if [ -z "$DOWNLOAD_URL" ]; then
+    resolve_release || exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Installation
