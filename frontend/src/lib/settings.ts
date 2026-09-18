@@ -40,7 +40,6 @@ export function editableSettings(value: ServerFastDL): ServerSettings {
     enabled: value.enabled,
     autoindex: value.autoindex,
     game_dir: value.game_dir,
-    manage_game_config: value.manage_game_config,
     generate_bz2: value.generate_bz2,
   };
 }

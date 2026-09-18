@@ -151,15 +151,8 @@ pub fn update_server<H: HostApi>(
         revoke_previous(host, previous, &next)?;
     }
 
-    // Keep the route disabled until both the game configuration and publication succeed.
     store::save_server_state(host, server.id, &next)?;
     sync::publish_server(host, &node, &next, false)?;
-
-    if next.settings.manage_game_config && next.settings.enabled {
-        let download_url = paths::download_url(&config, &next.token);
-        game_config::apply(host, &next, Some(&download_url))?;
-    }
-
     sync::publish_server(host, &node, &next, next.settings.enabled && server.enabled)?;
 
     next.synced = true;
@@ -202,23 +195,5 @@ fn revoke_previous<H: HostApi>(
     let node = node_setup::get_node(host, previous.node_id)?;
     sync::publish_server(host, &node, previous, false)?;
 
-    if needs_config_cleanup(previous, next)? {
-        game_config::apply(host, previous, None)?;
-    }
-
     Ok(())
-}
-
-fn needs_config_cleanup(previous: &ServerState, next: &ServerState) -> Result<bool, ApiError> {
-    // After a move, the former directory may belong to another server.
-    if previous.node_id != next.node_id || previous.server_dir != next.server_dir {
-        return Ok(false);
-    }
-    if !previous.settings.manage_game_config || (!previous.settings.enabled && previous.synced) {
-        return Ok(false);
-    }
-
-    Ok(paths::game_config(previous)? != paths::game_config(next)?
-        || !next.settings.manage_game_config
-        || !next.settings.enabled)
 }

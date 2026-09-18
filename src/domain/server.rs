@@ -39,7 +39,7 @@ pub struct ServerInput {
     #[serde(default)]
     pub engine: Engine,
     pub game_dir: String,
-    #[serde(default = "default_true")]
+    #[serde(default, skip_serializing)]
     pub manage_game_config: bool,
     #[serde(default = "default_true")]
     pub generate_bz2: bool,
@@ -83,7 +83,7 @@ impl ServerInput {
             autoindex: false,
             engine,
             game_dir: game_dir.into(),
-            manage_game_config: true,
+            manage_game_config: false,
             generate_bz2: true,
         }
     }
@@ -155,7 +155,7 @@ mod tests {
     use super::{Engine, ServerInput, ServerResponse, ServerState};
 
     #[test]
-    fn omitted_automatic_settings_remain_enabled() {
+    fn omitted_settings_enable_compression_without_automatic_game_configuration() {
         let fixture = concat!(
             r#"{"enabled":false,"autoindex":false,"engine":"source","#,
             r#""game_dir":"cstrike"}"#,
@@ -163,7 +163,7 @@ mod tests {
 
         let settings: ServerInput = serde_json::from_str(fixture).unwrap();
 
-        assert!(settings.manage_game_config);
+        assert!(!settings.manage_game_config);
         assert!(settings.generate_bz2);
     }
 
@@ -199,11 +199,28 @@ mod tests {
 
         assert_eq!(value["engine"], "source");
         assert_eq!(value["game_dir"], "cstrike");
-        assert_eq!(value["manage_game_config"], true);
+        assert!(value.get("manage_game_config").is_none());
         assert!(value.get("settings").is_none());
         assert!(value.get("server_id").is_none());
         assert!(value.get("node_id").is_none());
         assert!(value.get("token").is_none());
+    }
+
+    #[test]
+    fn legacy_automatic_configuration_is_accepted_but_not_serialized() {
+        let fixture = concat!(
+            r#"{"enabled":true,"autoindex":false,"engine":"source","#,
+            r#""game_dir":"cstrike","manage_game_config":true}"#,
+        );
+        let settings: ServerInput = serde_json::from_str(fixture).unwrap();
+
+        assert!(settings.manage_game_config);
+        assert!(
+            serde_json::to_value(settings)
+                .unwrap()
+                .get("manage_game_config")
+                .is_none()
+        );
     }
 
     #[test]

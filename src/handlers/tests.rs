@@ -68,7 +68,6 @@ fn server_settings() -> Value {
         "autoindex": true,
         "engine": "goldsource",
         "game_dir": "cstrike",
-        "manage_game_config": true,
         "generate_bz2": true,
     })
 }
@@ -89,12 +88,11 @@ fn half_life_settings() -> Value {
         "autoindex": false,
         "engine": "goldsource",
         "game_dir": "valve",
-        "manage_game_config": true,
         "generate_bz2": true,
     })
 }
 
-fn configured_half_life_host(os: &str, work_path: &str) -> MockHost {
+fn saved_half_life_host(os: &str, work_path: &str) -> MockHost {
     let mut host = half_life_host();
     let node = host.nodes.get_mut(&1).unwrap();
     node.os = os.into();
@@ -108,11 +106,6 @@ fn configured_half_life_host(os: &str, work_path: &str) -> MockHost {
         },
     )
     .unwrap();
-    host.command_results.push_back(CommandOutput {
-        output: "{\"configured\":true}".into(),
-        exit_code: 0,
-        error: None,
-    });
     let response = router::dispatch(
         &mut host,
         &request(1, "PUT", "/servers/3/fastdl", half_life_settings()),
@@ -146,6 +139,26 @@ fn enable_server(host: &mut MockHost) {
     assert_eq!(response.status_code, 200);
 }
 
+fn legacy_automatic_configuration(host: &mut MockHost) {
+    let mut state = serde_json::to_value(stored_server(host, 3)).unwrap();
+    state["settings"]["manage_game_config"] = json!(true);
+    let payload = serde_json::to_vec(&state).unwrap();
+    for (key, entity) in [
+        ("fastdl:server", StorageEntity::server(3)),
+        ("fastdl:registration:3", StorageEntity::node(1)),
+    ] {
+        host.storage_set(key, entity, &payload).unwrap();
+    }
+    assert!(stored_server(host, 3).settings.manage_game_config);
+}
+
+fn configure_server(host: &mut MockHost) -> pb::HttpResponse {
+    router::dispatch(
+        host,
+        &request(1, "POST", "/servers/3/fastdl/configure", json!({})),
+    )
+}
+
 fn start_installation(host: &mut MockHost) -> u64 {
     let response = router::dispatch(host, &request(1, "POST", "/nodes/1/setup", json!({})));
     assert_eq!(response.status_code, 202);
@@ -157,7 +170,7 @@ fn start_installation(host: &mut MockHost) -> u64 {
 }
 
 #[test]
-fn explicit_configuration_uses_saved_settings_for_both_engines_and_manual_mode() {
+fn explicit_configuration_uses_saved_settings_regardless_of_the_legacy_automatic_setting() {
     for engine in ["GoldSource", "Source"] {
         for manage_game_config in [true, false] {
             let mut host = installed_host();
@@ -167,7 +180,7 @@ fn explicit_configuration_uses_saved_settings_for_both_engines_and_manual_mode()
             let saved =
                 router::dispatch(&mut host, &request(1, "PUT", "/servers/3/fastdl", settings));
             assert_eq!(saved.status_code, 200);
-            host.commands.clear();
+            assert!(host.commands.is_empty());
             host.uploads.clear();
             let storage = host.storage.clone();
             host.grants
@@ -391,7 +404,7 @@ fn game_entity_determines_the_engine_without_a_client_selection() {
             uploaded_server_config(&host, 1, 3)["generate_bz2"],
             expected_engine == "source"
         );
-        assert!(host.commands[0].contains(&format!("--engine {expected_engine}")));
+        assert!(host.commands.is_empty());
     }
 }
 
@@ -575,7 +588,7 @@ fn view_ability_does_not_allow_mutation() {
 }
 
 #[test]
-fn enable_disable_uses_scoped_helper_and_opaque_public_url() {
+fn enable_disable_updates_publication_without_writing_game_configuration() {
     let mut host = installed_host();
     let response = router::dispatch(
         &mut host,
@@ -590,19 +603,20 @@ fn enable_disable_uses_scoped_helper_and_opaque_public_url() {
     let body: Value = serde_json::from_slice(&response.body).expect("response body is JSON");
     assert!(body.get("node_id").is_none());
     assert!(body.get("server_id").is_none());
+    assert!(body.get("manage_game_config").is_none());
     assert!(!String::from_utf8_lossy(&response.body).contains("/srv/gameap"));
     let state = stored_server(&mut host, 3);
     assert_eq!(state.token.len(), 32);
 
-    let command = host
-        .commands
-        .last()
-        .expect("configuration command executed");
-    assert!(command.contains(concat!(
-        "configure --root /srv/gameap/servers/cs ",
-        "--game-dir cstrike --engine goldsource ",
-        "--url http://cdn.example/",
-    )));
+    assert!(host.commands.is_empty());
+    assert_eq!(
+        body["download_url"],
+        format!("http://cdn.example/{}/", state.token)
+    );
+    assert_eq!(
+        uploaded_server_config(&host, 1, state.server_id)["enabled"],
+        true
+    );
     assert!(
         !host
             .uploads
@@ -615,11 +629,7 @@ fn enable_disable_uses_scoped_helper_and_opaque_public_url() {
         router::dispatch(&mut host, &request(1, "PUT", "/servers/3/fastdl", disabled)).status_code,
         200
     );
-    let command = host
-        .commands
-        .last()
-        .expect("configuration command executed");
-    assert!(!command.contains("--url"));
+    assert!(host.commands.is_empty());
     let dropin = uploaded_server_config(&host, 1, state.server_id);
     assert_eq!(dropin["enabled"], false);
 }
@@ -660,23 +670,23 @@ fn rejects_traversal_and_arbitrary_roots() {
 }
 
 #[test]
-fn configuration_helper_failure_keeps_route_disabled_and_unsynced() {
+fn explicit_configuration_failure_preserves_the_published_route() {
     let mut host = installed_host();
+    enable_server(&mut host);
+    let storage = host.storage.clone();
     host.fail_on.clear();
     host.command_results.push_back(CommandOutput {
         exit_code: 1,
         error: None,
         output: "rejected symbolic link".into(),
     });
-    let response = router::dispatch(
-        &mut host,
-        &request(1, "PUT", "/servers/3/fastdl", server_settings()),
-    );
+    let response = configure_server(&mut host);
     assert_eq!(response.status_code, 409);
     let state = stored_server(&mut host, 3);
-    assert!(!state.synced);
+    assert!(state.synced);
     let dropin = uploaded_server_config(&host, 1, 3);
-    assert_eq!(dropin["enabled"], false);
+    assert_eq!(dropin["enabled"], true);
+    assert_eq!(host.storage, storage);
 }
 
 #[test]
@@ -738,6 +748,8 @@ fn half_life_configuration_accepts_plain_and_decorated_confirmation() {
         assert_eq!(body["engine"], "goldsource");
         assert_eq!(body["game_dir"], "valve");
 
+        assert!(host.commands.is_empty());
+        assert_eq!(configure_server(&mut host).status_code, 200, "{output}");
         let state = stored_server(&mut host, 3);
         assert!(state.synced);
         assert_eq!(
@@ -756,7 +768,7 @@ fn half_life_configuration_accepts_plain_and_decorated_confirmation() {
 }
 
 #[test]
-fn unverified_configuration_keeps_half_life_disabled_without_exposing_diagnostics() {
+fn unverified_configuration_preserves_publication_without_exposing_diagnostics() {
     for confirmation in [
         "",
         "confirmation missing",
@@ -767,7 +779,7 @@ fn unverified_configuration_keeps_half_life_disabled_without_exposing_diagnostic
         "{\"configured\":true}\n{\"configured\":false}",
         "status: {\"configured\":true}",
     ] {
-        let mut host = half_life_host();
+        let mut host = saved_half_life_host("linux", "/srv/gameap");
         let token = format!("{:032x}", 1);
         let output = if confirmation.is_empty() {
             String::new()
@@ -782,10 +794,7 @@ fn unverified_configuration_keeps_half_life_disabled_without_exposing_diagnostic
             error: None,
         });
 
-        let response = router::dispatch(
-            &mut host,
-            &request(1, "PUT", "/servers/3/fastdl", half_life_settings()),
-        );
+        let response = configure_server(&mut host);
         assert_eq!(response.status_code, 502, "{confirmation}");
         let body: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["code"], "CONFIGURE_FAILED", "{confirmation}");
@@ -797,10 +806,10 @@ fn unverified_configuration_keeps_half_life_disabled_without_exposing_diagnostic
         assert!(!public_body.contains("configured"));
 
         let state = stored_server(&mut host, 3);
-        assert!(!state.synced);
+        assert!(state.synced);
         assert!(state.settings.enabled);
         assert_eq!(state.token, token);
-        assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], false);
+        assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], true);
         assert_eq!(host.logs.len(), 1);
         assert!(!host.logs[0].contains(&token));
         assert!(host.logs[0].contains("exit_code=0"));
@@ -810,23 +819,20 @@ fn unverified_configuration_keeps_half_life_disabled_without_exposing_diagnostic
 #[test]
 fn failed_configuration_command_cannot_be_overridden_by_a_success_confirmation() {
     for (exit_code, error) in [(7, None), (0, Some("private daemon error".into()))] {
-        let mut host = half_life_host();
+        let mut host = saved_half_life_host("linux", "/srv/gameap");
         host.command_results.push_back(CommandOutput {
             output: "{\"configured\":true}".into(),
             exit_code,
             error,
         });
 
-        let response = router::dispatch(
-            &mut host,
-            &request(1, "PUT", "/servers/3/fastdl", half_life_settings()),
-        );
+        let response = configure_server(&mut host);
         assert_eq!(response.status_code, 409);
         let body: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["code"], "GAME_CONFIG_UPDATE_FAILED");
         assert!(!String::from_utf8_lossy(&response.body).contains("private daemon error"));
-        assert!(!stored_server(&mut host, 3).synced);
-        assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], false);
+        assert!(stored_server(&mut host, 3).synced);
+        assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], true);
         assert_eq!(host.logs.len(), 1);
         assert!(host.logs[0].contains(&format!("exit_code={exit_code}")));
     }
@@ -834,7 +840,7 @@ fn failed_configuration_command_cannot_be_overridden_by_a_success_confirmation()
 
 #[test]
 fn configuration_diagnostics_are_bounded_and_redact_the_download_token() {
-    let mut host = half_life_host();
+    let mut host = saved_half_life_host("linux", "/srv/gameap");
     let token = format!("{:032x}", 1);
     host.command_results.push_back(CommandOutput {
         output: format!(
@@ -845,10 +851,7 @@ fn configuration_diagnostics_are_bounded_and_redact_the_download_token() {
         error: None,
     });
 
-    let response = router::dispatch(
-        &mut host,
-        &request(1, "PUT", "/servers/3/fastdl", half_life_settings()),
-    );
+    let response = configure_server(&mut host);
     assert_eq!(response.status_code, 502);
     assert_eq!(host.logs.len(), 1);
     let log = &host.logs[0];
@@ -860,7 +863,7 @@ fn configuration_diagnostics_are_bounded_and_redact_the_download_token() {
 
 #[test]
 fn retrying_unverified_half_life_configuration_applies_the_same_settings() {
-    let mut host = half_life_host();
+    let mut host = saved_half_life_host("linux", "/srv/gameap");
     host.command_results.extend([
         CommandOutput {
             output: "confirmation missing".into(),
@@ -874,17 +877,13 @@ fn retrying_unverified_half_life_configuration_applies_the_same_settings() {
         },
     ]);
 
-    let settings = half_life_settings();
-    let failed = router::dispatch(
-        &mut host,
-        &request(1, "PUT", "/servers/3/fastdl", settings.clone()),
-    );
+    let failed = configure_server(&mut host);
     assert_eq!(failed.status_code, 502);
     let pending = stored_server(&mut host, 3);
-    assert!(!pending.synced);
-    assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], false);
+    assert!(pending.synced);
+    assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], true);
 
-    let retried = router::dispatch(&mut host, &request(1, "PUT", "/servers/3/fastdl", settings));
+    let retried = configure_server(&mut host);
     assert_eq!(retried.status_code, 200);
     let state = stored_server(&mut host, 3);
     assert!(state.synced);
@@ -897,23 +896,18 @@ fn retrying_unverified_half_life_configuration_applies_the_same_settings() {
 }
 
 #[test]
-fn admin_node_routes_apply_half_life_configuration_before_restarting() {
-    for (os, work_path, newline, restart) in [
-        (
-            "linux",
-            "/srv/gameap",
-            "\n",
-            "systemctl restart gameap-fastdl",
-        ),
+fn admin_node_routes_publish_fastdl_and_restart_without_writing_game_configuration() {
+    for (os, work_path, restart) in [
+        ("linux", "/srv/gameap", "systemctl restart gameap-fastdl"),
         (
             "windows",
             r"C:\GameAP Data",
-            "\r\n",
             "Restart-Service -Name gameap-fastdl",
         ),
     ] {
         for (method, path) in [("PUT", "/nodes/1/config"), ("POST", "/nodes/1/sync")] {
-            let mut host = configured_half_life_host(os, work_path);
+            let mut host = saved_half_life_host(os, work_path);
+            legacy_automatic_configuration(&mut host);
             let config = NodeConfig {
                 listen: "0.0.0.0:8080".into(),
                 public_base_url: "http://192.0.2.10:8080".into(),
@@ -924,13 +918,14 @@ fn admin_node_routes_apply_half_life_configuration_before_restarting() {
                 store::save_config(&mut host, 1, &config).unwrap();
                 json!({})
             };
-            host.command_results.push_back(CommandOutput {
-                output: format!(
-                    "{work_path}# gameap-fastdl configure{newline}{newline}{{\"configured\":true}}{newline}{newline}Exited with 0{newline}"
-                ),
-                exit_code: 0,
-                error: None,
-            });
+            host.fail_on.push((
+                " configure ".into(),
+                CommandOutput {
+                    output: "game configuration must not be written".into(),
+                    exit_code: 1,
+                    error: None,
+                },
+            ));
 
             let response = router::dispatch(&mut host, &request(1, method, path, body.clone()));
             assert_eq!(response.status_code, 200, "{os} {method} {path}");
@@ -941,33 +936,43 @@ fn admin_node_routes_apply_half_life_configuration_before_restarting() {
                 assert_eq!(response_body["synced"], true);
             }
             let saved = store::get_config(&mut host, 1).unwrap();
-            assert_eq!(saved.listen, config.listen);
-            assert_eq!(saved.public_base_url, config.public_base_url);
+            assert_eq!(saved, config);
             let daemon_config: Value =
                 serde_json::from_slice(host.file(1, ".plugins/i3z7ix336msd4/config.json").unwrap())
                     .unwrap();
             assert_eq!(daemon_config["listen"], config.listen);
-
-            let state = stored_server(&mut host, 3);
-            assert!(state.synced);
-            assert!(state.settings.enabled);
+            assert!(stored_server(&mut host, 3).synced);
             assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], true);
-            assert_eq!(host.commands.len(), 2, "{:?}", host.commands);
-            assert!(host.commands[0].contains("--game-dir valve --engine goldsource"));
-            assert!(host.commands[0].contains(&format!(
-                "--url {}/{}/",
-                config.public_base_url, state.token
-            )));
-            assert!(host.commands[1].contains(restart), "{:?}", host.commands);
+            assert_eq!(host.commands.len(), 1, "{:?}", host.commands);
+            assert!(host.commands[0].contains(restart), "{:?}", host.commands);
+            assert!(
+                host.uploads
+                    .iter()
+                    .all(|(_, path, _)| !path.ends_with("server.cfg"))
+            );
             assert!(host.logs.is_empty());
+
+            let response = router::dispatch(
+                &mut host,
+                &request(1, "GET", "/servers/3/fastdl", json!({})),
+            );
+            let body: Value = serde_json::from_slice(&response.body).unwrap();
+            assert!(
+                body["configuration"][0]
+                    .as_str()
+                    .unwrap()
+                    .contains(&config.public_base_url)
+            );
+            assert!(body.get("manage_game_config").is_none());
         }
     }
 }
 
 #[test]
-fn admin_node_routes_skip_restart_after_unverified_configuration_and_allow_retry() {
+fn admin_node_routes_report_restart_failure_and_allow_retry_without_writing_game_configuration() {
     for (method, path) in [("PUT", "/nodes/1/config"), ("POST", "/nodes/1/sync")] {
-        let mut host = configured_half_life_host("linux", "/srv/gameap");
+        let mut host = saved_half_life_host("linux", "/srv/gameap");
+        legacy_automatic_configuration(&mut host);
         let config = NodeConfig {
             listen: "0.0.0.0:8080".into(),
             public_base_url: "http://192.0.2.10:8080".into(),
@@ -979,56 +984,30 @@ fn admin_node_routes_skip_restart_after_unverified_configuration_and_allow_retry
             json!({})
         };
         host.command_results.push_back(CommandOutput {
-            output: "/srv/private# configure\n\n{invalid}\n\nExited with 0\n".into(),
-            exit_code: 0,
+            output: "private service error".into(),
+            exit_code: 1,
             error: None,
         });
 
         let response = router::dispatch(&mut host, &request(1, method, path, body.clone()));
         assert_eq!(response.status_code, 502, "{method} {path}");
         let error_body: Value = serde_json::from_slice(&response.body).unwrap();
-        assert_eq!(error_body["code"], "CONFIGURE_FAILED");
-        assert_eq!(error_body["server_name"], "Half-Life");
-        assert!(
-            error_body["message"]
-                .as_str()
-                .unwrap()
-                .contains("Half-Life")
-        );
-        for field in ["server_id", "node_id", "token"] {
-            assert!(error_body.get(field).is_none());
-        }
-        assert!(!String::from_utf8_lossy(&response.body).contains("/srv/private"));
-        assert!(!String::from_utf8_lossy(&response.body).contains("{invalid}"));
-        let pending = stored_server(&mut host, 3);
-        assert!(!String::from_utf8_lossy(&response.body).contains(&pending.token));
-        assert!(!pending.synced);
-        assert!(pending.settings.enabled);
-        assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], false);
-        assert_eq!(host.commands.len(), 1);
-        assert!(host.commands[0].contains(" configure "));
-        assert_eq!(
-            store::get_config(&mut host, 1).unwrap().public_base_url,
-            config.public_base_url
-        );
+        assert_eq!(error_body["code"], "RESTART_FAILED");
+        assert!(!String::from_utf8_lossy(&response.body).contains("private service error"));
+        assert_eq!(host.commands, ["systemctl restart gameap-fastdl"]);
+        assert_eq!(store::get_config(&mut host, 1).unwrap(), config);
 
-        host.commands.clear();
-        host.command_results.push_back(CommandOutput {
-            output: "/srv/gameap# configure\n\n{\"configured\":true}\n\nExited with 0\n".into(),
-            exit_code: 0,
-            error: None,
-        });
         let retried = router::dispatch(&mut host, &request(1, method, path, body));
         assert_eq!(retried.status_code, 200, "{method} {path}");
-        let state = stored_server(&mut host, 3);
-        assert!(state.synced);
-        assert_eq!(state.settings, pending.settings);
-        assert_eq!(state.token, pending.token);
+        assert!(stored_server(&mut host, 3).synced);
         assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], true);
-        assert_eq!(host.commands.len(), 2);
-        assert!(host.commands[0].contains(" configure "));
-        assert_eq!(host.commands[1], "systemctl restart gameap-fastdl");
-        assert_eq!(host.logs.len(), 1);
+        assert_eq!(
+            host.commands,
+            [
+                "systemctl restart gameap-fastdl",
+                "systemctl restart gameap-fastdl"
+            ]
+        );
     }
 }
 
@@ -1142,7 +1121,7 @@ fn moving_to_unconfigured_node_revokes_original_route_first() {
 }
 
 #[test]
-fn failed_disable_remains_visibly_unsynchronized() {
+fn disabling_fastdl_does_not_require_a_writable_game_configuration() {
     let mut host = installed_host();
     assert_eq!(
         router::dispatch(
@@ -1162,14 +1141,17 @@ fn failed_disable_remains_visibly_unsynchronized() {
     value["enabled"] = false.into();
     assert_eq!(
         router::dispatch(&mut host, &request(1, "PUT", "/servers/3/fastdl", value)).status_code,
-        409
+        200
     );
     let response = router::dispatch(
         &mut host,
         &request(1, "GET", "/servers/3/fastdl", json!({})),
     );
     let body: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(body["synced"], false);
+    assert_eq!(body["synced"], true);
+    assert!(host.commands.is_empty());
+    assert_eq!(host.command_results.len(), 1);
+    assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], false);
 }
 
 #[test]
@@ -1549,6 +1531,8 @@ fn windows_helper_preserves_spaces_and_never_invokes_a_shell_for_paths() {
         &request(1, "PUT", "/servers/3/fastdl", server_settings()),
     );
     assert_eq!(response.status_code, 200);
+    assert!(host.commands.is_empty());
+    assert_eq!(configure_server(&mut host).status_code, 200);
     assert!(host.commands[0].starts_with(concat!(
         r#""C:\GameAP Data\.plugins\i3z7ix336msd4\gameap-fastdl.exe" "#,
         r#"configure --root "C:\GameAP Data\servers\cs""#,
@@ -1556,74 +1540,105 @@ fn windows_helper_preserves_spaces_and_never_invokes_a_shell_for_paths() {
 }
 
 #[test]
-fn changing_managed_configuration_removes_the_previous_block() {
+fn saving_legacy_settings_never_applies_or_removes_game_configuration() {
     for (field, value) in [
         ("game_dir", json!("valve")),
+        ("enabled", json!(false)),
+        ("autoindex", json!(false)),
         ("manage_game_config", json!(false)),
     ] {
         let mut host = installed_host();
         enable_server(&mut host);
-        host.commands.clear();
-
+        legacy_automatic_configuration(&mut host);
+        let original = host
+            .file(1, "servers/cs/cstrike/server.cfg")
+            .unwrap()
+            .to_vec();
         let mut settings = server_settings();
+        settings["manage_game_config"] = json!(true);
         settings[field] = value;
-        let response =
-            router::dispatch(&mut host, &request(1, "PUT", "/servers/3/fastdl", settings));
+        let response = router::dispatch(
+            &mut host,
+            &request(1, "PUT", "/servers/3/fastdl", settings.clone()),
+        );
         assert_eq!(response.status_code, 200, "{field}");
-
-        let cleanup = host.commands.first().expect("old configuration is cleaned");
-        assert!(cleanup.contains("--game-dir cstrike --engine goldsource"));
-        assert!(!cleanup.contains("--url"));
-
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body.get("manage_game_config").is_none());
+        assert!(host.commands.is_empty());
+        assert_eq!(
+            host.file(1, "servers/cs/cstrike/server.cfg").unwrap(),
+            original
+        );
         let state = stored_server(&mut host, 3);
-        let dropin = uploaded_server_config(&host, 1, 3);
         assert!(state.synced);
-        assert_eq!(dropin["enabled"], true);
-
-        if field == "game_dir" {
-            assert_eq!(host.commands.len(), 2);
-            assert!(host.commands[1].contains("--game-dir valve --engine goldsource --url"));
-            assert_eq!(state.settings.game_dir, "valve");
-            assert_eq!(dropin["root"], "/srv/gameap/servers/cs/valve");
-        } else {
-            assert_eq!(host.commands.len(), 1);
-            assert!(!state.settings.manage_game_config);
-            assert_eq!(dropin["root"], "/srv/gameap/servers/cs/cstrike");
-        }
+        assert!(!state.settings.manage_game_config);
+        let dropin = uploaded_server_config(&host, 1, 3);
+        assert_eq!(dropin["enabled"], settings["enabled"]);
+        assert_eq!(dropin["autoindex"], settings["autoindex"]);
+        assert_eq!(
+            dropin["root"],
+            format!(
+                "/srv/gameap/servers/cs/{}",
+                settings["game_dir"].as_str().unwrap()
+            )
+        );
     }
 }
 
 #[test]
-fn cleanup_failure_keeps_the_previous_route_disabled() {
-    for (field, value) in [
-        ("game_dir", json!("valve")),
-        ("manage_game_config", json!(false)),
-    ] {
+fn lifecycle_reconciliation_ignores_legacy_automatic_game_configuration() {
+    for scenario in ["engine", "directory", "node", "disabled", "deleted"] {
         let mut host = installed_host();
         enable_server(&mut host);
-        host.commands.clear();
-        host.fail_on.clear();
-        host.command_results.push_back(CommandOutput {
-            output: "configuration is not writable".into(),
-            exit_code: 1,
-            error: None,
-        });
-
-        let mut settings = server_settings();
-        settings[field] = value;
-        let response =
-            router::dispatch(&mut host, &request(1, "PUT", "/servers/3/fastdl", settings));
-        assert_eq!(response.status_code, 409, "{field}");
-
-        assert_eq!(host.commands.len(), 1);
-        assert!(host.commands[0].contains("--game-dir cstrike --engine goldsource"));
-        assert!(!host.commands[0].contains("--url"));
-        assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], false);
-
-        let state = stored_server(&mut host, 3);
-        assert!(!state.synced);
-        assert_eq!(state.settings.game_dir, "cstrike");
-        assert!(state.settings.manage_game_config);
+        legacy_automatic_configuration(&mut host);
+        match scenario {
+            "engine" => {
+                host.game_engines.insert("cstrike".into(), "Source".into());
+            }
+            "directory" => host.servers.get_mut(&3).unwrap().dir = "servers/new".into(),
+            "node" => {
+                let mut node = host.nodes.get(&1).unwrap().clone();
+                node.id = 2;
+                host.nodes.insert(2, node);
+                let config = store::get_config(&mut host, 1).unwrap();
+                let status = store::get_status(&mut host, 1).unwrap();
+                store::save_config(&mut host, 2, &config).unwrap();
+                store::save_status(&mut host, 2, &status).unwrap();
+                host.servers.get_mut(&3).unwrap().node_id = 2;
+            }
+            "disabled" => host.servers.get_mut(&3).unwrap().enabled = false,
+            "deleted" => {
+                host.servers.remove(&3);
+            }
+            _ => unreachable!(),
+        }
+        if scenario == "deleted" {
+            sync::on_deleted(&mut host, 3, 1).unwrap();
+        } else {
+            sync::on_updated(&mut host, 3).unwrap();
+        }
+        assert!(host.commands.is_empty(), "{scenario}");
+        assert!(
+            host.uploads
+                .iter()
+                .all(|(_, path, _)| !path.ends_with("server.cfg"))
+        );
+        let node_id = if scenario == "node" { 2 } else { 1 };
+        let dropin = uploaded_server_config(&host, node_id, 3);
+        assert_eq!(
+            dropin["enabled"],
+            !matches!(scenario, "disabled" | "deleted"),
+            "{scenario}"
+        );
+        if scenario == "engine" {
+            assert_eq!(dropin["engine"], "source");
+        }
+        if scenario == "directory" {
+            assert_eq!(dropin["root"], "/srv/gameap/servers/new/cstrike");
+        }
+        if scenario == "node" {
+            assert_eq!(uploaded_server_config(&host, 1, 3)["enabled"], false);
+        }
     }
 }
 

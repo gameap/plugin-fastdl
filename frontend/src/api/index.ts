@@ -27,7 +27,6 @@ export interface ServerSettings {
   enabled: boolean;
   autoindex: boolean;
   game_dir: string;
-  manage_game_config: boolean;
   generate_bz2: boolean;
 }
 

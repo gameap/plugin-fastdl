@@ -15,10 +15,10 @@ vi.mock('naive-ui', async () => {
 
 const server: ServerFastDL = {
   server_name: 'Half-Life', enabled: true, autoindex: false, engine: 'goldsource', game_dir: 'valve',
-  manage_game_config: true, generate_bz2: true, can_manage: true, supported: true, node_ready: true,
+  generate_bz2: true, can_manage: true, supported: true, node_ready: true,
   synced: true, warnings: [], download_url: 'https://downloads.example.test/files/', configuration: ['sv_allowdownload 1'],
 };
-const configureError = { response: { data: { code: 'CONFIGURE_FAILED', message: 'unverified output' } } };
+const nodeError = { response: { data: { code: 'NODE_UNAVAILABLE', message: 'publication failed' } } };
 const apps: App[] = [];
 async function mount() {
   const props = reactive({ serverId: 4, pluginId: 'i3z7ix336msd4' });
@@ -30,7 +30,7 @@ async function mount() {
 beforeEach(() => {
   vi.stubGlobal('window', { $message: { success: vi.fn() } });
   vi.spyOn(fastdlApi, 'server').mockResolvedValue({ ...server });
-  vi.spyOn(fastdlApi, 'saveServer').mockRejectedValue(configureError);
+  vi.spyOn(fastdlApi, 'saveServer').mockRejectedValue(nodeError);
   vi.spyOn(fastdlApi, 'applyConfiguration').mockResolvedValue({ configured: true, rcon_applied: true });
 });
 afterEach(() => {
@@ -49,7 +49,7 @@ describe('FastDL save recovery', () => {
     await settle();
 
     expect(fastdlApi.server).toHaveBeenCalledTimes(2);
-    expect(find(root, 'NAlert', 'configure_failed')).toBeDefined();
+    expect(find(root, 'NAlert', 'node_unavailable')).toBeDefined();
     expect(find(root, 'NAlert', 'sync_required')).toBeDefined();
     expect(find(root, 'NCheckbox', 'autoindex').props.checked).toBe(true);
     expect(find(root, 'GButton', 'save').props.disabled).toBe(false);
@@ -83,7 +83,7 @@ describe('FastDL save recovery', () => {
     await invoke(find(root, 'NForm'), 'onSubmit', { preventDefault() {} });
     await settle();
     expect(find(root, 'GButton', 'save').props.disabled).toBe(true);
-    expect(content(root)).not.toContain('configure_failed');
+    expect(content(root)).not.toContain('node_unavailable');
     expect(window.$message?.success).toHaveBeenCalledWith('synced');
     expect(descendants(root).filter((node) => node.tag === 'NCard' && ['download_url', 'game_configuration'].includes(String(node.props.title)))).toHaveLength(2);
   });
@@ -95,7 +95,7 @@ describe('FastDL save recovery', () => {
     vi.mocked(fastdlApi.server).mockRejectedValue(new Error('connection lost'));
     await invoke(find(root, 'NForm'), 'onSubmit', { preventDefault() {} });
     await settle();
-    expect(find(root, 'NAlert', 'configure_failed')).toBeDefined();
+    expect(find(root, 'NAlert', 'node_unavailable')).toBeDefined();
     expect(find(root, 'GButton', 'save').props.disabled).toBe(false);
   });
 
@@ -113,7 +113,7 @@ describe('FastDL save recovery', () => {
     await saving;
     await settle();
     expect(descendants(root).find((node) => node.tag === 'NInput' && node.props.placeholder === 'cstrike')?.props.value).toBe('cstrike');
-    expect(content(root)).not.toContain('configure_failed');
+    expect(content(root)).not.toContain('node_unavailable');
   });
 
   it('does not update or notify a closed tab after recovery finishes', async () => {
@@ -135,9 +135,12 @@ describe('FastDL save recovery', () => {
 });
 
 describe('game configuration application', () => {
-  it.each([true, false])('applies saved settings when automatic management is %s', async (manageGameConfig) => {
-    vi.mocked(fastdlApi.server).mockResolvedValue({ ...server, manage_game_config: manageGameConfig });
+  it.each([true, false])('applies only on request regardless of the legacy automatic setting: %s', async (manageGameConfig) => {
+    const legacyServer = { ...server, manage_game_config: manageGameConfig };
+    vi.mocked(fastdlApi.server).mockResolvedValue(legacyServer);
     const { root } = await mount();
+    expect(content(root)).not.toContain('manage_game_config');
+    expect(fastdlApi.applyConfiguration).not.toHaveBeenCalled();
     const card = descendants(root).find((node) => node.tag === 'NCard' && node.props.title === 'game_configuration')!;
     const button = find(card, 'GButton', 'apply_configuration');
     expect(button.props.size).toBe('small');
@@ -278,8 +281,9 @@ describe('game-derived engine', () => {
     await settle();
     await invoke(find(root, 'NForm'), 'onSubmit', { preventDefault() {} });
     expect(fastdlApi.saveServer).toHaveBeenCalledWith(4, {
-      enabled: true, autoindex: true, game_dir: 'valve', manage_game_config: true, generate_bz2: true,
+      enabled: true, autoindex: true, game_dir: 'valve', generate_bz2: true,
     });
+    expect(fastdlApi.applyConfiguration).not.toHaveBeenCalled();
   });
 
   it('prevents saving when the game engine is unsupported', async () => {

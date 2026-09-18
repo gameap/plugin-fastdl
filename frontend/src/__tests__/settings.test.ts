@@ -47,17 +47,17 @@ describe('node listen address', () => {
 describe('server settings', () => {
   const server: ServerFastDL = {
     server_name: 'Counter-Strike', enabled: true, engine: 'goldsource', autoindex: false,
-    game_dir: 'cstrike', manage_game_config: true, generate_bz2: true,
+    game_dir: 'cstrike', generate_bz2: true,
     download_url: 'https://example.com/opaque-route/', configuration: [],
     can_manage: true, supported: true, node_ready: true, synced: true, warnings: [],
   };
   it('sends only writable fields, excluding permissions and generated paths', () => {
-    expect(Object.keys(editableSettings(server)).sort()).toEqual(['autoindex', 'enabled', 'game_dir', 'generate_bz2', 'manage_game_config']);
+    const legacyServer = { ...server, manage_game_config: true };
+    expect(Object.keys(editableSettings(legacyServer)).sort()).toEqual(['autoindex', 'enabled', 'game_dir', 'generate_bz2']);
   });
-  it('detects configuration management and compression edits', () => {
+  it('detects compression edits', () => {
     const form = editableSettings(server);
     expect(settingsChanged(form, server)).toBe(false);
-    expect(settingsChanged({ ...form, manage_game_config: false }, server)).toBe(true);
     expect(settingsChanged({ ...form, generate_bz2: false }, server)).toBe(true);
   });
   it('allows applying an unchanged configuration again after a partial backend failure', () => {
@@ -77,11 +77,11 @@ describe('server settings', () => {
 });
 
 describe('translations', () => {
-  it('has the same non-empty translations and placeholders in both languages', () => {
-    expect(Object.keys(translations.ru).sort()).toEqual(Object.keys(translations.en).sort());
+  it.each(Object.entries(translations))('has the same non-empty translations and placeholders in %s', (_locale, translation) => {
+    expect(Object.keys(translation).sort()).toEqual(Object.keys(translations.en).sort());
     for (const key of Object.keys(translations.en) as (keyof typeof translations.en)[]) {
-      expect(translations.ru[key].trim()).not.toBe('');
-      expect(translations.ru[key].match(/\{\w+\}/g) ?? []).toEqual(translations.en[key].match(/\{\w+\}/g) ?? []);
+      expect(translation[key].trim()).not.toBe('');
+      expect(translation[key].match(/\{\w+\}/g) ?? []).toEqual(translations.en[key].match(/\{\w+\}/g) ?? []);
     }
   });
 });

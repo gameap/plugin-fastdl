@@ -34,12 +34,6 @@
             </NCheckbox>
             <p id="fastdl-bz2-hint" class="fastdl-hint fastdl-option-hint">{{ trans('generate_bz2_hint') }}</p>
           </div>
-          <div>
-            <NCheckbox v-model:checked="form.manage_game_config" :disabled="locked" aria-describedby="fastdl-config-hint">
-              {{ trans('manage_game_config') }}
-            </NCheckbox>
-            <p id="fastdl-config-hint" class="fastdl-hint fastdl-option-hint">{{ trans('manage_game_config_hint') }}</p>
-          </div>
           <p v-if="dirty" class="fastdl-hint">{{ trans('unsaved') }}</p>
           <div v-if="data.can_manage" class="fastdl-save-bar">
             <GButton type="submit" color="green" :loading="saving" :disabled="locked || !pendingApply || (form.enabled && !data.node_ready)">
@@ -62,7 +56,7 @@
       </NCard>
       <NCard v-if="applied && data.enabled && data.configuration.length" :title="trans('game_configuration')" size="small">
         <div class="fastdl-result">
-          <p class="fastdl-hint">{{ trans(data.manage_game_config ? 'config_apply_hint' : 'manual_config_hint') }}</p>
+          <p class="fastdl-hint">{{ trans('config_apply_hint') }}</p>
           <div class="fastdl-copyable">
             <pre class="fastdl-code fastdl-configuration" tabindex="0">{{ configurationText }}</pre>
             <button type="button" class="fastdl-copy-button" :title="trans('copy')" :aria-label="trans('copy')" @click="copy(configurationText)">
@@ -73,7 +67,7 @@
             </button>
           </div>
           <div v-if="data.can_manage" class="fastdl-actions">
-            <GButton type="button" size="small" color="white" :loading="applyingConfiguration" :disabled="!canApplyConfiguration" @click="applyConfiguration">
+            <GButton type="button" size="small" color="black" :loading="applyingConfiguration" :disabled="!canApplyConfiguration" @click="applyConfiguration">
               {{ trans('apply_configuration') }}
             </GButton>
           </div>
@@ -99,7 +93,7 @@ const props = defineProps<{ serverId: number; pluginId: string }>();
 const { trans } = providePluginTrans(props.pluginId);
 const data = ref<ServerFastDL | null>(null);
 const configurationText = computed(() => data.value?.configuration.join('\n') ?? '');
-const form = reactive<ServerSettings>({ enabled: false, autoindex: false, game_dir: '', manage_game_config: true, generate_bz2: true });
+const form = reactive<ServerSettings>({ enabled: false, autoindex: false, game_dir: '', generate_bz2: true });
 const loading = ref(false);
 const saving = ref(false);
 const applyingConfiguration = ref(false);

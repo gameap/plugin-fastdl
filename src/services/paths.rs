@@ -1,6 +1,6 @@
 //! Paths passed to the daemon or to the scoped game-configuration helper.
 
-use crate::domain::{Engine, NodeConfig, NodeOs, ServerState, validate_relative};
+use crate::domain::{NodeConfig, NodeOs, validate_relative};
 use crate::host_api::NodeInfo;
 use crate::http::ApiError;
 
@@ -65,16 +65,6 @@ pub fn binary(node: &NodeInfo) -> Result<String, ApiError> {
     };
 
     absolute(node, &format!("{PLUGIN_DIR}/{filename}"))
-}
-
-pub fn game_config(state: &ServerState) -> Result<String, ApiError> {
-    let root = relative_game_root(&state.server_dir, &state.settings.game_dir)?;
-    let filename = match state.settings.engine {
-        Engine::Source => "cfg/server.cfg",
-        Engine::Goldsource => "server.cfg",
-    };
-
-    Ok(format!("{root}/{filename}"))
 }
 
 pub fn download_url(config: &NodeConfig, token: &str) -> String {
